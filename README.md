@@ -1,5 +1,7 @@
 # Rhythm Service
 
+All environment variables consumed by this service use the `RHYTHM_SERVICE_` prefix. Update local `.env` files to match `.env.example` before starting the service.
+
 Worker phân tích audio cho Bach Viet Cam. Service đọc task từ RabbitMQ, tải hai audio URL, chạy pYIN/DTW, lưu kết quả vào PostgreSQL và cung cấp API nội bộ để backend đọc kết quả.
 
 ## Chạy local

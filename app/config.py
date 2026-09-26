@@ -4,7 +4,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_prefix="RHYTHM_SERVICE_",
+        extra="ignore",
+    )
 
     app_name: str = "rhythm-service"
     app_host: str = "0.0.0.0"
@@ -14,9 +19,6 @@ class Settings(BaseSettings):
     rhythm_task_queue: str = "rhythm.evaluate.v1"
     rhythm_dead_letter_queue: str = "rhythm.evaluate.dlq"
     internal_api_key: str = "change-me"
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
-    gemini_timeout_seconds: float = 30.0
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     gemini_timeout_seconds: float = 30.0
