@@ -1,5 +1,8 @@
 from collections.abc import Generator
+from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -15,9 +18,11 @@ SessionFactory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=Fal
 
 
 def initialize_database() -> None:
-    from app.models.evaluation import RhythmEvaluation
-
-    Base.metadata.create_all(bind=engine)
+    """Apply all pending Alembic migrations."""
+    project_directory = Path(__file__).resolve().parents[1]
+    alembic_config = Config(str(project_directory / "alembic.ini"))
+    alembic_config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
+    command.upgrade(alembic_config, "head")
 
 
 def get_session() -> Generator[Session, None, None]:

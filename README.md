@@ -30,6 +30,25 @@ uv run python -m app.main
 
 Commit cả `pyproject.toml` và `uv.lock`. Docker dùng `uv sync --locked` để không tự thay đổi dependency trong lúc build.
 
+## Database migration
+
+Schema được quản lý bằng Alembic. Service tự chạy `alembic upgrade head` trước khi mở HTTP server và RabbitMQ worker.
+
+Khi thay đổi model:
+
+```powershell
+uv run alembic revision --autogenerate -m "describe schema change"
+uv run alembic upgrade head
+```
+
+Luôn kiểm tra migration được sinh ra trước khi commit. Với database hiện tại đã được tạo bằng `create_all()` trước khi Alembic được thêm vào, chạy một lần:
+
+```powershell
+uv run alembic stamp 20260926_0001
+```
+
+Lệnh `stamp` chỉ đánh dấu migration baseline đã được áp dụng, không xóa hoặc thay đổi dữ liệu. Database mới sẽ tự tạo schema bằng `alembic upgrade head`.
+
 ## RabbitMQ task
 
 Queue mặc định: `rhythm.evaluate.v1`.

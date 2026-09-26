@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "RabbitMQ worker and result API for Bach Viet Cam audio rhythm evaluation"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "alembic>=1.15,<2",
     "aio-pika>=9.5,<10",
     "fastapi>=0.115,<1",
     "httpx>=0.28,<1",
