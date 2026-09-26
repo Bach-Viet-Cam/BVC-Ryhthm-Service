@@ -30,6 +30,8 @@ uv run python -m app.main
 
 Commit cả `pyproject.toml` và `uv.lock`. Docker dùng `uv sync --locked` để không tự thay đổi dependency trong lúc build.
 
+Sau khi phân tích audio, service gọi Gemini để tạo `aiFeedback` và lưu cùng `result_json`. Nếu chưa cấu hình `GEMINI_API_KEY` hoặc Gemini lỗi, kết quả phân tích vẫn được lưu với nội dung fallback.
+
 ## Database migration
 
 Schema được quản lý bằng Alembic. Service tự chạy `alembic upgrade head` trước khi mở HTTP server và RabbitMQ worker.

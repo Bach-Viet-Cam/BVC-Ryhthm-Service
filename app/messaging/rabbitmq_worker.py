@@ -11,6 +11,7 @@ from app.audio.downloader import AudioDownloadError, download_audio
 from app.config import get_settings
 from app.database import SessionFactory
 from app.evaluation.evaluator import evaluate_pair
+from app.feedback.gemini_feedback import generate_feedback
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.messages import EvaluationTask
 
@@ -84,6 +85,7 @@ class RabbitMqWorker:
             teacher_path = await download_audio(str(task.templateUrl), work_directory)
             student_path = await download_audio(str(task.studentUrl), work_directory)
             result = await asyncio.to_thread(evaluate_pair, teacher_path, student_path, task.instrumentId)
+            result["aiFeedback"] = await generate_feedback(result)
             self.repository.mark_completed(session, record, result)
         finally:
             session.close()

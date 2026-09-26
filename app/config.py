@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     rhythm_task_queue: str = "rhythm.evaluate.v1"
     rhythm_dead_letter_queue: str = "rhythm.evaluate.dlq"
     internal_api_key: str = "change-me"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_timeout_seconds: float = 30.0
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_timeout_seconds: float = 30.0
     max_file_bytes: int = 25 * 1024 * 1024
     download_timeout_seconds: float = 60.0
     max_retries: int = 3
