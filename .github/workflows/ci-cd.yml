@@ -85,10 +85,15 @@ jobs:
       - name: Remove container owned by another compose project
         run: |
           # The container used to be managed by the monorepo compose project; free its name once.
-          $owner = docker ps -a --filter "name=^$env:CONTAINER_NAME$" --format '{{.Label "com.docker.compose.project"}}'
-          if ($owner -and $owner -ne $env:COMPOSE_PROJECT) {
-            Write-Host "Removing $env:CONTAINER_NAME (owned by compose project '$owner')"
-            docker rm -f $env:CONTAINER_NAME
+          # (json template: PowerShell 5.1 strips inner double quotes passed to native exes)
+          $id = docker ps -a -q --filter "name=^$env:CONTAINER_NAME$"
+          if ($id) {
+            $labels = docker inspect --format '{{json .Config.Labels}}' $id | ConvertFrom-Json
+            $owner = $labels.'com.docker.compose.project'
+            if ($owner -and $owner -ne $env:COMPOSE_PROJECT) {
+              Write-Host "Removing $env:CONTAINER_NAME (owned by compose project '$owner')"
+              docker rm -f $env:CONTAINER_NAME
+            }
           }
 
       - name: Rebuild and restart with Docker Compose
