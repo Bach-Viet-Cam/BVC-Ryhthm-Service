@@ -65,18 +65,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Write .env from secret
+      - name: Write .env from secrets
         env:
-          # Full .env content, stored as secret ENV_FILE in the "production" environment
-          ENV_CONTENT: ${{ secrets.ENV_FILE }}
+          # Every secret of the "production" environment (or repo/org) becomes one KEY=value line
+          SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:ENV_CONTENT)) {
-            Write-Error "CRITICAL: secret ENV_FILE is not set in the 'production' environment!"
+          $secrets = $env:SECRETS_JSON | ConvertFrom-Json
+          $lines = $secrets.PSObject.Properties |
+            Where-Object { $_.Name -ne 'github_token' } |
+            ForEach-Object { "$($_.Name)=$($_.Value)" }
+          if (-not $lines) {
+            Write-Error "CRITICAL: no secrets found in the 'production' environment!"
             exit 1
           }
           # UTF-8 without BOM so docker compose parses the first key correctly
-          [System.IO.File]::WriteAllText("$PWD\.env", $env:ENV_CONTENT, (New-Object System.Text.UTF8Encoding $false))
-          Write-Host "Wrote .env ($((Get-Content .env | Where-Object { $_ -match '^[A-Za-z_]+=' }).Count) variables)"
+          [System.IO.File]::WriteAllLines("$PWD\.env", [string[]]$lines, (New-Object System.Text.UTF8Encoding $false))
+          Write-Host "Wrote .env with keys: $(($secrets.PSObject.Properties.Name | Where-Object { $_ -ne 'github_token' }) -join ', ')"
 
       - name: Remove container owned by another compose project
         run: |
