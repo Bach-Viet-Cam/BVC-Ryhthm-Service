@@ -1,0 +1,33 @@
+name: bvc-rhythm-service
+
+services:
+  rhythm-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bvc-rhythm-service
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - RHYTHM_SERVICE_APP_PORT=8001
+      - RHYTHM_SERVICE_DATABASE_URL=${RHYTHM_SERVICE_DATABASE_URL:-postgresql+psycopg://bvc_admin:change-this-password@bvc-postgres:5432/bachvietcam_rhythm_staging}
+      - RHYTHM_SERVICE_RABBITMQ_URL=${RHYTHM_SERVICE_RABBITMQ_URL:?Set RHYTHM_SERVICE_RABBITMQ_URL to your RabbitMQ Cloud AMQP URL}
+      - RHYTHM_SERVICE_TASK_QUEUE=${RHYTHM_SERVICE_RHYTHM_TASK_QUEUE:-${RHYTHM_SERVICE_TASK_QUEUE:-rhythm.evaluate.v1}}
+      - RHYTHM_SERVICE_DEAD_LETTER_QUEUE=${RHYTHM_SERVICE_RHYTHM_DEAD_LETTER_QUEUE:-${RHYTHM_SERVICE_DEAD_LETTER_QUEUE:-rhythm.evaluate.dlq}}
+      - RHYTHM_SERVICE_INTERNAL_API_KEY=${RHYTHM_SERVICE_INTERNAL_API_KEY:-change-me-in-production}
+      - RHYTHM_SERVICE_GEMINI_API_KEY=${RHYTHM_SERVICE_GEMINI_API_KEY:-}
+      - RHYTHM_SERVICE_GEMINI_MODEL=${RHYTHM_SERVICE_GEMINI_MODEL:-gemini-3.6-flash}
+      - RHYTHM_SERVICE_GEMINI_TIMEOUT_SECONDS=${RHYTHM_SERVICE_GEMINI_TIMEOUT_SECONDS:-500}
+      - RHYTHM_SERVICE_MAX_FILE_BYTES=26214400
+      - RHYTHM_SERVICE_DOWNLOAD_TIMEOUT_SECONDS=60
+      - RHYTHM_SERVICE_MAX_RETRIES=3
+      - RHYTHM_SERVICE_TEMP_DIRECTORY=/tmp/rhythm-service
+      - RHYTHM_SERVICE_ALLOWED_HOSTS=${RHYTHM_SERVICE_ALLOWED_HOSTS:-}
+    networks:
+      - bvc-network
+
+networks:
+  bvc-network:
+    name: bvc-network
+    external: true
