@@ -14,8 +14,6 @@ concurrency:
 env:
   CONTAINER_NAME: bvc-rhythm-service
   COMPOSE_PROJECT: bvc-rhythm-service
-  # .env on the self-hosted runner machine (kept outside the repo)
-  ENV_FILE: D:\BVC\env\rhythm-service.env
 
 jobs:
   ci:
@@ -67,13 +65,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Copy .env into workspace
+      - name: Write .env from secret
+        env:
+          # Full .env content, stored as secret ENV_FILE in the "production" environment
+          ENV_CONTENT: ${{ secrets.ENV_FILE }}
         run: |
-          if (-not (Test-Path $env:ENV_FILE)) {
-            Write-Error "CRITICAL: Could not find $env:ENV_FILE on the runner machine!"
+          if ([string]::IsNullOrWhiteSpace($env:ENV_CONTENT)) {
+            Write-Error "CRITICAL: secret ENV_FILE is not set in the 'production' environment!"
             exit 1
           }
-          Copy-Item -Path $env:ENV_FILE -Destination ".env" -Force
+          # UTF-8 without BOM so docker compose parses the first key correctly
+          [System.IO.File]::WriteAllText("$PWD\.env", $env:ENV_CONTENT, (New-Object System.Text.UTF8Encoding $false))
+          Write-Host "Wrote .env ($((Get-Content .env | Where-Object { $_ -match '^[A-Za-z_]+=' }).Count) variables)"
 
       - name: Remove container owned by another compose project
         run: |
