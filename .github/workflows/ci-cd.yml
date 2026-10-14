@@ -3,9 +3,9 @@ name: CI/CD
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
+    branches: [uat]
   push:
-    branches: [main]
+    branches: [uat]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
