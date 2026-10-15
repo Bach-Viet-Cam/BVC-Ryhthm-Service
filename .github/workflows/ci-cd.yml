@@ -82,6 +82,16 @@ jobs:
           [System.IO.File]::WriteAllLines("$PWD\.env", [string[]]$lines, (New-Object System.Text.UTF8Encoding $false))
           Write-Host "Wrote .env with keys: $(($secrets.PSObject.Properties.Name | Where-Object { $_ -ne 'github_token' }) -join ', ')"
 
+      - name: Build image
+        run: |
+          docker compose build rhythm-service
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run database migrations
+        run: |
+          docker compose run --rm --no-deps rhythm-service uv run alembic upgrade head
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Remove container owned by another compose project
         run: |
           # The container used to be managed by the monorepo compose project; free its name once.
@@ -96,9 +106,10 @@ jobs:
             }
           }
 
-      - name: Rebuild and restart with Docker Compose
+      - name: Restart with Docker Compose
         run: |
-          docker compose up -d --build --remove-orphans
+          docker compose up -d --no-build --remove-orphans
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           docker image prune -f
 
       - name: Smoke test health endpoint
