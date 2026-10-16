@@ -2,11 +2,11 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, st
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.database import get_session, initialize_database
-from app.messaging.rabbitmq_worker import RabbitMqWorker
+from app.database import SessionFactory, get_session, initialize_database
 from app.models.evaluation import RhythmEvaluation
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.messages import EvaluationError, EvaluationRecordResponse, EvaluationTask
+from app.services.evaluation_service import EvaluationService
 
 
 def create_app() -> FastAPI:
@@ -36,7 +36,8 @@ def create_app() -> FastAPI:
         record = repository.create_if_missing(session, task)
 
         if record.status not in {"completed", "processing"}:
-            background_tasks.add_task(RabbitMqWorker().process_direct_task, task)
+            evaluation_service = EvaluationService(repository, SessionFactory, get_settings().temp_directory)
+            background_tasks.add_task(evaluation_service.process_direct_task, task)
 
         return _to_response(record)
 
