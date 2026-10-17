@@ -97,4 +97,4 @@ Kết quả có các trạng thái `queued`, `processing`, `completed`, `failed`
 
 ## Lưu ý bảo mật
 
-Audio URL phải là HTTP/HTTPS. Service chặn loopback, private IP, link-local IP và reserved IP để hạn chế SSRF. Nên cấu hình `ALLOWED_HOSTS` với domain của object storage khi triển khai production.
+Audio URL phải là HTTP/HTTPS. Service cho phép localhost và địa chỉ mạng nội bộ mà worker truy cập được. Nếu cấu hình `RHYTHM_SERVICE_ALLOWED_HOSTS`, hostname của storage phải nằm trong danh sách này. Khi worker chạy trong Docker, localhost trỏ đến chính container worker.

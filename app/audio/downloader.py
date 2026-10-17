@@ -1,6 +1,3 @@
-import asyncio
-import ipaddress
-import socket
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -17,19 +14,6 @@ class AudioDownloadError(Exception):
         self.retryable = retryable
 
 
-def _is_private_host(hostname: str) -> bool:
-    try:
-        addresses = {result[4][0] for result in socket.getaddrinfo(hostname, None)}
-    except socket.gaierror as error:
-        raise AudioDownloadError("AUDIO_HOST_NOT_FOUND", "Không phân giải được host audio") from error
-
-    for address in addresses:
-        parsed = ipaddress.ip_address(address)
-        if parsed.is_private or parsed.is_loopback or parsed.is_link_local or parsed.is_reserved:
-            return True
-    return False
-
-
 def _validate_url(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -39,8 +23,7 @@ def _validate_url(url: str) -> None:
     hostname = parsed.hostname.lower()
     if settings.allowed_host_values and hostname not in settings.allowed_host_values:
         raise AudioDownloadError("AUDIO_HOST_NOT_ALLOWED", "Host audio không nằm trong allowlist")
-    if _is_private_host(hostname):
-        raise AudioDownloadError("PRIVATE_AUDIO_URL", "Không cho phép truy cập địa chỉ mạng nội bộ")
+
 
 
 async def download_audio(url: str, target_directory: Path) -> Path:
@@ -79,6 +62,3 @@ async def download_audio(url: str, target_directory: Path) -> Path:
 
     return target_path
 
-
-async def resolve_host_safely(hostname: str) -> None:
-    await asyncio.to_thread(_is_private_host, hostname)
