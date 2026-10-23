@@ -145,3 +145,32 @@ def evaluate_pair(teacher_path: Path, student_path: Path, instrument_id: str) ->
     result["teacherTempoBpm"] = _estimate_tempo(teacher_path)
     result["studentTempoBpm"] = _estimate_tempo(student_path)
     return result
+
+
+def evaluate_against_template(template: dict, student_path: Path, instrument_id: str) -> dict:
+    """Evaluate a student recording using the persisted features of a template."""
+    instrument = get_instrument(instrument_id)
+    template_instrument = template.get("instrument")
+    pitch = template.get("pitch")
+    rhythm = template.get("rhythm")
+    if not isinstance(template_instrument, dict) or template_instrument.get("code") != instrument_id:
+        raise ValueError("Template analysis khÃ´ng khá»›p nháº¡c cá»¥.")
+    if not isinstance(pitch, dict) or pitch.get("sampleRate") != SAMPLE_RATE or pitch.get("hopLength") != HOP_LENGTH:
+        raise ValueError("Template analysis khÃ´ng tÆ°Æ¡ng thÃ­ch phiÃªn báº£n chÃ¢m Ä‘iá»ƒm.")
+    values = pitch.get("f0Hz")
+    if not isinstance(values, list) or not values:
+        raise ValueError("Template analysis khÃ´ng cÃ³ dá»¯ liá»‡u cao Ä‘á»™.")
+    try:
+        teacher_f0 = np.asarray([np.nan if value is None else float(value) for value in values], dtype=float)
+        teacher_tempo = float(rhythm["tempoBpm"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("Template analysis khÃ´ng hợp lá»‡.") from error
+    if not np.all(np.isfinite(teacher_f0) | np.isnan(teacher_f0)) or not np.isfinite(teacher_tempo) or teacher_tempo <= 0:
+        raise ValueError("Template analysis chứa giÃ¡ trá»‹ khÃ´ng hợp lá»‡.")
+    student_f0 = _extract_f0(student_path, float(instrument["fmin"]), float(instrument["fmax"]))
+    result = _score_pitch_and_rhythm(student_f0, teacher_f0, float(instrument["toleranceCents"]))
+    result["instrumentId"] = instrument_id
+    result["instrument"] = instrument["name"]
+    result["teacherTempoBpm"] = round(teacher_tempo, 1)
+    result["studentTempoBpm"] = _estimate_tempo(student_path)
+    return result

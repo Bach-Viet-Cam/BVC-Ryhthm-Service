@@ -41,9 +41,74 @@ def setup(tmp_path, amplitude):
     return service, sessions, calls
 
 
-def task():
-    return EvaluationTask(messageId=str(uuid4()), evaluationId=str(uuid4()),
-                          templateUrl="https://example.com/teacher.wav", studentUrl="https://example.com/student.wav", instrumentId="dan_bau")
+def task(**changes):
+    values = dict(messageId=str(uuid4()), evaluationId=str(uuid4()),
+                  templateUrl="https://example.com/teacher.wav", studentUrl="https://example.com/student.wav", instrumentId="dan_bau")
+    values.update(changes)
+    return EvaluationTask(**values)
+
+
+@pytest.mark.asyncio
+async def test_completed_template_artifact_skips_template_download_and_uses_cached_features(tmp_path):
+    from app.repositories.template_analysis_repository import TemplateAnalysisRepository
+    from app.schemas.template_messages import TemplateAnalysisTask
+    from app.services.artifact_storage_service import ArtifactStorageService
+
+    service, sessions, _ = setup(tmp_path, 0.2)
+    analysis = TemplateAnalysisTask(messageId=uuid4(), analysisId=uuid4(), sheetMusicId=uuid4(), mediaFileId=uuid4(),
+                                    mediaUrl="https://example.com/teacher.wav", instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z")
+    storage = ArtifactStorageService(tmp_path / "artifacts")
+    artifact = storage.write(analysis, {
+        "analysisId": str(analysis.analysisId), "instrument": {"code": "dan_bau"},
+        "pitch": {"sampleRate": 22050, "hopLength": 512, "f0Hz": [220.0, None]},
+        "rhythm": {"tempoBpm": 100.0},
+    })
+    template_repository = TemplateAnalysisRepository()
+    with sessions() as session:
+        record = template_repository.create_if_missing(session, analysis, {"name": "ÄÃ n Báº§u"}, {})
+        template_repository.mark_completed(session, record, "source", artifact, {"verdict": "PASS"})
+
+    downloads = []
+    async def download(url, directory):
+        downloads.append(str(url))
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "student.wav"
+        sf.write(path, 0.2 * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
+        return path
+    async def cached(template, student, instrument):
+        assert template["analysisId"] == str(analysis.analysisId)
+        assert instrument == "dan_bau"
+        return {"overallScore": 91, "pitchAccuracyPercent": 92, "rhythmAccuracyPercent": 90}
+    async def unexpected(*args):
+        pytest.fail("Cache hit must not evaluate or download the template")
+
+    service.template_storage = storage
+    service.audio_service = SimpleNamespace(download=download)
+    service.rhythm_analysis_service = SimpleNamespace(evaluate=unexpected, evaluate_against_template=cached)
+    payload = task(templateAnalysisId=analysis.analysisId)
+    await service.process_direct_task(payload)
+
+    assert downloads == ["https://example.com/student.wav"]
+    with sessions() as session:
+        assert service.repository.get(session, payload.evaluationId).result_json["overallScore"] == 91
+
+
+@pytest.mark.asyncio
+async def test_missing_template_artifact_falls_back_to_the_legacy_pair_evaluation(tmp_path):
+    service, sessions, _ = setup(tmp_path, 0.2)
+    downloads = []
+    async def download(url, directory):
+        downloads.append(str(url))
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / ("student.wav" if "student" in str(url) else "teacher.wav")
+        sf.write(path, 0.2 * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
+        return path
+    async def legacy(*args):
+        return {"overallScore": 80, "pitchAccuracyPercent": 80, "rhythmAccuracyPercent": 80}
+    service.audio_service = SimpleNamespace(download=download)
+    service.rhythm_analysis_service = SimpleNamespace(evaluate=legacy, evaluate_against_template=lambda *args: pytest.fail("unexpected cache hit"))
+    await service.process_direct_task(task(templateAnalysisId=uuid4()))
+    assert downloads == ["https://example.com/teacher.wav", "https://example.com/student.wav"]
 
 
 @pytest.mark.asyncio

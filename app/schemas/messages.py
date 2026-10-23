@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
@@ -10,6 +11,7 @@ class EvaluationTask(BaseModel):
     templateUrl: AnyHttpUrl
     studentUrl: AnyHttpUrl
     instrumentId: str = Field(min_length=1, max_length=64)
+    templateAnalysisId: UUID | None = None
     requestedAt: datetime | None = None
 
 
