@@ -15,7 +15,8 @@ from app.config import get_settings
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.messages import JOB_ORDER, EvaluationTask, JobCode, JobReport
 from app.services.audio_service import AudioService
-from app.services.callback_service import CallbackService
+from app.services.audio_quality_service import AudioProcessingError, AudioQualityError, AudioQualityService
+from app.services.job_execution_service import JobExecutionService
 from app.services.feedback_service import FeedbackService
 from app.services.job_progress_service import JobProgressService
 from app.services.rhythm_analysis_service import RhythmAnalysisService
@@ -47,14 +48,13 @@ class EvaluationService:
         self.audio_service = audio_service or AudioService()
         self.rhythm_analysis_service = rhythm_analysis_service or RhythmAnalysisService()
         self.feedback_service = feedback_service or FeedbackService()
-        self.callback_service = callback_service or CallbackService()
-
-    @property
-    def progress(self) -> JobProgressService:
-        # Built on access so a replaced session_factory or callback_service is always used
-        return JobProgressService(self.repository, self.session_factory, self.callback_service)
+        self.quality_service = AudioQualityService()
+        self.execution = JobExecutionService()
 
     async def process_task(self, task: EvaluationTask) -> None:
+        await self.execution.run(lambda: self._process_task(task))
+
+    async def _process_task(self, task: EvaluationTask) -> None:
         session = self.session_factory()
         try:
             record = self.repository.create_if_missing(session, task)
@@ -64,23 +64,27 @@ class EvaluationService:
             attempt = record.attempt
         finally:
             session.close()
-        await self.run_from(task, JOB_ORDER[0], attempt)
 
-    async def run_from(self, task: EvaluationTask, from_job: JobCode, attempt: int) -> None:
-        """Run the jobs from `from_job` on; errors propagate so the caller decides about retries."""
-        work_directory = Path(self.temp_directory) / uuid4().hex
-        scores = self.progress.load_scores(task.evaluationId) if from_job == "feedback" else None
         try:
-            for job in JOB_ORDER[JOB_ORDER.index(from_job):]:
-                if not await self._report(task, job, JobReport(status="started", attempt=attempt)):
-                    return  # a newer attempt took over
-                if job == "quality_check" and get_settings().quality_check_mode == "external":
-                    self.progress.mark_waiting(task.evaluationId)
-                    return  # resumed by POST /evaluations/{id}/jobs/quality_check
-                if job == "audio_analysis" or (job != "quality_check" and scores is None):
-                    scores = await self._run_job(self._analyze(task, work_directory))
-                result = await self._finish_job(job, scores)
-                await self._report(task, job, JobReport(status="done", attempt=attempt), result)
+            teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
+            student_path = await self.audio_service.download(str(task.studentUrl), work_directory)
+            quality = await self.quality_service.inspect(student_path)
+            quality_session = self.session_factory()
+            try:
+                quality_record = self.repository.get(quality_session, task.evaluationId)
+                self.repository.save_quality(quality_session, quality_record, quality)
+            finally:
+                quality_session.close()
+            self.quality_service.ensure_acceptable(quality)
+            result = await self.rhythm_analysis_service.evaluate(teacher_path, student_path, task.instrumentId)
+            result["aiFeedback"] = await self.feedback_service.generate(result)
+            result["studentAudioQuality"] = quality
+            session = self.session_factory()
+            try:
+                record = self.repository.get(session, task.evaluationId)
+                self.repository.mark_completed(session, record, result)
+            finally:
+                session.close()
         finally:
             shutil.rmtree(work_directory, ignore_errors=True)
 
@@ -89,48 +93,12 @@ class EvaluationService:
 
     async def process_direct_task(self, task: EvaluationTask) -> None:
         """Process an HTTP task and persist errors instead of raising them."""
-        await self._persist_errors(task, self.process_task(task))
-
-    async def record_failure(self, task: EvaluationTask, code: str, error_message: str) -> None:
-        session = self.session_factory()
         try:
-            record = self.repository.create_if_missing(session, task)
-            job, attempt = record.stage or JOB_ORDER[0], record.attempt
-        finally:
-            session.close()
-        await self.progress.report(
-            task.evaluationId, job, JobReport(status="failed", attempt=attempt, code=code, reason=error_message)
-        )
-
-    async def _finish_job(self, job: JobCode, scores: dict[str, Any] | None) -> dict[str, Any] | None:
-        # JOB-01 is bypassed and JOB-02/03 share evaluate_pair until the algorithm is split
-        if job == "comparison":
-            return scores
-        if job == "feedback":
-            feedback = await self._run_job(self.feedback_service.generate(scores))
-            return {**scores, "aiFeedback": feedback}
-        return None
-
-    async def _analyze(self, task: EvaluationTask, work_directory: Path) -> dict[str, Any]:
-        teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
-        student_path = await self.audio_service.download(str(task.studentUrl), work_directory)
-        return await self.rhythm_analysis_service.evaluate(teacher_path, student_path, task.instrumentId)
-
-    async def _run_job(self, work: Awaitable[JobResult]) -> JobResult:
-        try:
-            return await asyncio.wait_for(work, timeout=get_settings().job_timeout_seconds)
-        except TimeoutError as error:
-            # GBR-65: a job running longer than the limit counts as failed
-            raise PermanentEvaluationError("JOB_TIMEOUT", "Bước xử lý chạy quá thời gian cho phép") from error
-
-    async def _report(
-        self, task: EvaluationTask, job: JobCode, report: JobReport, result: dict[str, Any] | None = None
-    ) -> bool:
-        return await self.progress.report(task.evaluationId, job, report, result) is not None
-
-    async def _persist_errors(self, task: EvaluationTask, work: Awaitable[None]) -> None:
-        try:
-            await work
+            await self.process_task(task)
+        except AudioQualityError as error:
+            self.record_failure(task, error.code, str(error))
+        except AudioProcessingError as error:
+            self.record_failure(task, error.code, str(error))
         except AudioDownloadError as error:
             await self.record_failure(task, error.code, str(error))
         except (ValueError, PermanentEvaluationError) as error:
