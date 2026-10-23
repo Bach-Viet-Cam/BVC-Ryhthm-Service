@@ -7,9 +7,19 @@ INSTRUMENTS: dict[str, dict[str, float | str]] = {
     "sao_truc": {"name": "Sáo Trúc", "fmin": 400.0, "fmax": 2500.0, "toleranceCents": 50.0},
 }
 
+FALLBACK_INSTRUMENT_ID = "khong_ho_tro"
+FALLBACK_INSTRUMENT_SOURCE_ID = "dan_bau"
+
+# Unsupported instruments are still analyzed with Đàn Bầu's acoustic settings.
+INSTRUMENTS[FALLBACK_INSTRUMENT_ID] = {
+    **INSTRUMENTS[FALLBACK_INSTRUMENT_SOURCE_ID],
+    "name": "Không hỗ trợ",
+}
+
+
+def normalize_instrument_id(instrument_id: str) -> str:
+    return instrument_id if instrument_id in INSTRUMENTS else FALLBACK_INSTRUMENT_ID
+
 
 def get_instrument(instrument_id: str) -> dict[str, float | str]:
-    try:
-        return INSTRUMENTS[instrument_id]
-    except KeyError as error:
-        raise ValueError(f"Nhạc cụ không được hỗ trợ: {instrument_id}") from error
+    return INSTRUMENTS[normalize_instrument_id(instrument_id)]

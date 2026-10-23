@@ -74,14 +74,17 @@ async def test_bad_template_payload_goes_to_dlq(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unsupported_instrument_is_saved_as_permanent_failure(tmp_path, monkeypatch):
+async def test_unsupported_instrument_falls_back_to_dan_bau_settings(tmp_path, monkeypatch):
     instance, sessions = worker(tmp_path, monkeypatch)
     payload = task(instrumentCode="unknown")
     message = Message(payload)
     await instance.handle_template_message(message)
     with sessions() as session:
         saved = instance.template_service.repository.get(session, str(payload.analysisId))
-        assert saved.status == "failed" and saved.error_code == "UNSUPPORTED_INSTRUMENT"
+        assert saved.status == "completed"
+        assert saved.instrument_code == "khong_ho_tro"
+        assert saved.instrument_config["fmin"] == 65.0
+        assert saved.instrument_config["fmax"] == 1200.0
     assert message.acked == 1
 
 

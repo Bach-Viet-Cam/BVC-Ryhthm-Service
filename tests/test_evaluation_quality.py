@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -29,21 +30,149 @@ def setup(tmp_path, amplitude):
         level = amplitude if "student" in url else 0.2
         sf.write(path, level * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
         return path
-    async def evaluate(*args):
-        calls.append("evaluate")
+    async def analyze(path, instrument):
+        calls.append("analyze")
+        return {"path": path, "instrumentId": instrument}
+    async def compare(teacher, student):
+        calls.append("compare")
         return {"overallScore": 88, "pitchAccuracyPercent": 90, "rhythmAccuracyPercent": 85}
     async def feedback(result):
         calls.append("feedback")
         return "Tiếp tục luyện tập."
     service.audio_service = SimpleNamespace(download=download)
-    service.rhythm_analysis_service = SimpleNamespace(evaluate=evaluate)
+    service.rhythm_analysis_service = SimpleNamespace(analyze=analyze, compare=compare)
     service.feedback_service = SimpleNamespace(generate=feedback)
     return service, sessions, calls
 
 
-def task():
-    return EvaluationTask(messageId=str(uuid4()), evaluationId=str(uuid4()),
-                          templateUrl="https://example.com/teacher.wav", studentUrl="https://example.com/student.wav", instrumentId="dan_bau")
+def task(**changes):
+    values = dict(messageId=str(uuid4()), evaluationId=str(uuid4()),
+                  templateUrl="https://example.com/teacher.wav", studentUrl="https://example.com/student.wav", instrumentId="dan_bau")
+    values.update(changes)
+    return EvaluationTask(**values)
+
+
+def test_unsupported_instrument_is_normalized_to_fallback():
+    assert task(instrumentId="unknown").instrumentId == "khong_ho_tro"
+
+
+def test_legacy_evaluator_falls_back_for_an_unknown_instrument(monkeypatch):
+    from app.evaluation import evaluator
+
+    monkeypatch.setattr(evaluator, "_extract_f0", lambda *_: np.array([220.0, 220.0]))
+    monkeypatch.setattr(evaluator, "_estimate_tempo", lambda _: 100.0)
+
+    result = evaluator.evaluate_pair(Path("teacher.wav"), Path("student.wav"), "unknown")
+
+    assert result["instrumentId"] == "khong_ho_tro"
+    assert result["instrument"] == "Không hỗ trợ"
+
+
+@pytest.mark.asyncio
+async def test_successful_evaluation_reports_each_practice_stage_in_order(tmp_path):
+    service, _, _ = setup(tmp_path, 0.2)
+    events = []
+
+    class Callback:
+        async def send(self, payload, job, status, **extra):
+            events.append((job, status, extra.get("result")))
+            return True
+
+    service.callback_client = Callback()
+    await service.process_direct_task(task(callbackUrl="https://backend.example/progress", attempt=2))
+
+    assert [(job, status) for job, status, _ in events] == [
+        ("quality_check", "started"), ("quality_check", "done"),
+        ("audio_analysis", "started"), ("audio_analysis", "done"),
+        ("comparison", "started"), ("comparison", "done"),
+        ("feedback", "started"), ("feedback", "done"),
+    ]
+    assert events[-1][2]["overallScore"] == 88
+
+
+@pytest.mark.asyncio
+async def test_quality_rejection_reports_rejected_without_later_stages(tmp_path):
+    service, _, _ = setup(tmp_path, 0)
+    events = []
+
+    class Callback:
+        async def send(self, payload, job, status, **extra):
+            events.append((job, status, extra.get("code")))
+            return True
+
+    service.callback_client = Callback()
+    await service.process_direct_task(task(callbackUrl="https://backend.example/progress"))
+    assert events[0:2] == [("quality_check", "started", None), ("quality_check", "rejected", "AUDIO_SILENT")]
+    assert len(events) == 2
+
+
+@pytest.mark.asyncio
+async def test_completed_template_artifact_skips_template_download_and_uses_cached_features(tmp_path):
+    from app.repositories.template_analysis_repository import TemplateAnalysisRepository
+    from app.schemas.template_messages import TemplateAnalysisTask
+    from app.services.artifact_storage_service import ArtifactStorageService
+
+    service, sessions, _ = setup(tmp_path, 0.2)
+    analysis = TemplateAnalysisTask(messageId=uuid4(), analysisId=uuid4(), sheetMusicId=uuid4(), mediaFileId=uuid4(),
+                                    mediaUrl="https://example.com/teacher.wav", instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z")
+    storage = ArtifactStorageService(tmp_path / "artifacts")
+    artifact = storage.write(analysis, {
+        "analysisId": str(analysis.analysisId), "instrument": {"code": "dan_bau"},
+        "pitch": {"sampleRate": 22050, "hopLength": 512, "f0Hz": [220.0, None]},
+        "rhythm": {"tempoBpm": 100.0},
+    })
+    template_repository = TemplateAnalysisRepository()
+    with sessions() as session:
+        record = template_repository.create_if_missing(session, analysis, {"name": "ÄÃ n Báº§u"}, {})
+        template_repository.mark_completed(session, record, "source", artifact, {"verdict": "PASS"})
+
+    downloads = []
+    async def download(url, directory):
+        downloads.append(str(url))
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "student.wav"
+        sf.write(path, 0.2 * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
+        return path
+    async def analyze(student, instrument):
+        return {"recording": "student", "instrumentId": instrument}
+    async def cached(template, instrument):
+        assert template["analysisId"] == str(analysis.analysisId)
+        assert instrument == "dan_bau"
+        return {"recording": "template", "instrumentId": instrument}
+    async def compare(template, student):
+        return {"overallScore": 91, "pitchAccuracyPercent": 92, "rhythmAccuracyPercent": 90}
+    async def unexpected(*args):
+        pytest.fail("Cache hit must not evaluate or download the template")
+
+    service.template_storage = storage
+    service.audio_service = SimpleNamespace(download=download)
+    service.rhythm_analysis_service = SimpleNamespace(analyze=analyze, analyze_template=cached, compare=compare)
+    payload = task(templateAnalysisId=analysis.analysisId)
+    await service.process_direct_task(payload)
+
+    assert downloads == ["https://example.com/student.wav"]
+    with sessions() as session:
+        assert service.repository.get(session, payload.evaluationId).result_json["overallScore"] == 91
+
+
+@pytest.mark.asyncio
+async def test_missing_template_artifact_falls_back_to_the_legacy_pair_evaluation(tmp_path):
+    service, sessions, _ = setup(tmp_path, 0.2)
+    downloads = []
+    async def download(url, directory):
+        downloads.append(str(url))
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / ("student.wav" if "student" in str(url) else "teacher.wav")
+        sf.write(path, 0.2 * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
+        return path
+    async def analyze(path, instrument):
+        return {"path": path, "instrumentId": instrument}
+    async def compare(teacher, student):
+        return {"overallScore": 80, "pitchAccuracyPercent": 80, "rhythmAccuracyPercent": 80}
+    service.audio_service = SimpleNamespace(download=download)
+    service.rhythm_analysis_service = SimpleNamespace(analyze=analyze, compare=compare, analyze_template=lambda *args: pytest.fail("unexpected cache hit"))
+    await service.process_direct_task(task(templateAnalysisId=uuid4()))
+    assert downloads == ["https://example.com/student.wav", "https://example.com/teacher.wav"]
 
 
 @pytest.mark.asyncio
@@ -63,7 +192,7 @@ async def test_student_quality_is_persisted_and_only_reject_prevents_scoring(tmp
         else:
             assert saved.result_json["overallScore"] == 88
             assert saved.result_json["studentAudioQuality"]["verdict"] == verdict
-            assert calls == ["evaluate", "feedback"]
+            assert calls == ["analyze", "analyze", "compare", "feedback"]
 
 
 @pytest.mark.asyncio

@@ -91,7 +91,7 @@ class RabbitMqWorker:
         try:
             await self.evaluation_service.process_task(task)
         except AudioQualityError as error:
-            await self._handle_error(message, task, error.code, str(error), False)
+            await self._handle_error(message, task, error.code, str(error), False, callback_failure=False)
         except AudioProcessingError as error:
             await self._handle_error(message, task, error.code, str(error), True)
         except AudioDownloadError as error:
@@ -106,10 +106,12 @@ class RabbitMqWorker:
             await message.ack()
 
     async def _handle_error(self, message: IncomingMessage, task: EvaluationTask, code: str,
-                            error_message: str, retryable: bool) -> None:
+                            error_message: str, retryable: bool, callback_failure: bool = True) -> None:
         if retryable and self._retry_count(message) < self.settings.max_retries:
             await self._publish_retry(message, self.settings.rhythm_task_queue)
         else:
+            if callback_failure:
+                await self.evaluation_service.report_final_failure(task, code, error_message)
             self.evaluation_service.record_failure(task, code, error_message)
         await message.ack()
 

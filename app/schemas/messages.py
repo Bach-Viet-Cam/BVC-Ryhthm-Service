@@ -1,7 +1,10 @@
 from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field, field_validator
+
+from app.evaluation.instruments import normalize_instrument_id
 
 
 class EvaluationTask(BaseModel):
@@ -10,6 +13,9 @@ class EvaluationTask(BaseModel):
     templateUrl: AnyHttpUrl
     studentUrl: AnyHttpUrl
     instrumentId: str = Field(min_length=1, max_length=64)
+    templateAnalysisId: UUID | None = None
+    callbackUrl: AnyHttpUrl | None = None
+    attempt: int = Field(default=1, ge=1)
     requestedAt: datetime | None = None
     callbackUrl: AnyHttpUrl | None = None
     # Attempt number owned by the backend; a republished job keeps it so its reports are not stale
@@ -43,6 +49,11 @@ class ProgressCallback(BaseModel):
     code: str | None = None
     reason: str | None = None
     result: dict[str, Any] | None = None
+
+    @field_validator("instrumentId")
+    @classmethod
+    def normalize_instrument(cls, value: str) -> str:
+        return normalize_instrument_id(value)
 
 
 class EvaluationError(BaseModel):
