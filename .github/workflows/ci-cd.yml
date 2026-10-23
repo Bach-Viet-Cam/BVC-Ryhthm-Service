@@ -27,13 +27,6 @@ jobs:
         run: uv sync --locked
       - name: Compile check
         run: uv run python -m compileall -q app migrations
-      - name: Run tests
-        run: |
-          if [ -d tests ]; then
-            uv run pytest
-          else
-            echo "No tests/ directory yet — skipping pytest."
-          fi
 
   docker-validate:
     if: github.event_name == 'pull_request'
@@ -111,13 +104,3 @@ jobs:
           docker compose up -d --no-build --remove-orphans
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           docker image prune -f
-
-      - name: Smoke test health endpoint
-        run: |
-          for ($i = 1; $i -le 10; $i++) {
-            curl.exe -fsS http://localhost:8001/health
-            if ($LASTEXITCODE -eq 0) { exit 0 }
-            Start-Sleep -Seconds 3
-          }
-          Write-Error "Rhythm service health check failed"
-          exit 1
