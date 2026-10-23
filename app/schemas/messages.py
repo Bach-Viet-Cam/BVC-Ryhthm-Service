@@ -12,6 +12,8 @@ class EvaluationTask(BaseModel):
     studentUrl: AnyHttpUrl
     instrumentId: str = Field(min_length=1, max_length=64)
     templateAnalysisId: UUID | None = None
+    callbackUrl: AnyHttpUrl | None = None
+    attempt: int = Field(default=1, ge=1)
     requestedAt: datetime | None = None
 
 

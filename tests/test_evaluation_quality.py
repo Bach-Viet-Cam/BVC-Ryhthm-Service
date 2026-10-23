@@ -49,6 +49,44 @@ def task(**changes):
 
 
 @pytest.mark.asyncio
+async def test_successful_evaluation_reports_each_practice_stage_in_order(tmp_path):
+    service, _, _ = setup(tmp_path, 0.2)
+    events = []
+
+    class Callback:
+        async def send(self, payload, job, status, **extra):
+            events.append((job, status, extra.get("result")))
+            return True
+
+    service.callback_client = Callback()
+    await service.process_direct_task(task(callbackUrl="https://backend.example/progress", attempt=2))
+
+    assert [(job, status) for job, status, _ in events] == [
+        ("quality_check", "started"), ("quality_check", "done"),
+        ("audio_analysis", "started"), ("audio_analysis", "done"),
+        ("comparison", "started"), ("comparison", "done"),
+        ("feedback", "started"), ("feedback", "done"),
+    ]
+    assert events[-1][2]["overallScore"] == 88
+
+
+@pytest.mark.asyncio
+async def test_quality_rejection_reports_rejected_without_later_stages(tmp_path):
+    service, _, _ = setup(tmp_path, 0)
+    events = []
+
+    class Callback:
+        async def send(self, payload, job, status, **extra):
+            events.append((job, status, extra.get("code")))
+            return True
+
+    service.callback_client = Callback()
+    await service.process_direct_task(task(callbackUrl="https://backend.example/progress"))
+    assert events[0:2] == [("quality_check", "started", None), ("quality_check", "rejected", "AUDIO_SILENT")]
+    assert len(events) == 2
+
+
+@pytest.mark.asyncio
 async def test_completed_template_artifact_skips_template_download_and_uses_cached_features(tmp_path):
     from app.repositories.template_analysis_repository import TemplateAnalysisRepository
     from app.schemas.template_messages import TemplateAnalysisTask

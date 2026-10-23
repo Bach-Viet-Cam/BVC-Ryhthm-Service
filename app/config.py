@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     template_dead_letter_queue: str = "rhythm.template.analyze.dlq"
     artifact_root: str = "/data/rhythm-artifacts"
     internal_api_key: str = "change-me"
+    callback_secret: str = ""
+    callback_timeout_seconds: float = 5.0
+    callback_max_retries: int = Field(default=2, ge=0, le=5)
+    callback_allowed_hosts: str = ""
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     gemini_timeout_seconds: float = 30.0
@@ -50,6 +54,10 @@ class Settings(BaseSettings):
     @property
     def allowed_host_values(self) -> set[str]:
         return {host.strip().lower() for host in self.allowed_hosts.split(",") if host.strip()}
+
+    @property
+    def callback_allowed_host_values(self) -> set[str]:
+        return {host.strip().lower() for host in self.callback_allowed_hosts.split(",") if host.strip()}
 
 
 @lru_cache

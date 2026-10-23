@@ -20,6 +20,7 @@ from app.services.job_execution_service import JobExecutionService
 from app.services.feedback_service import FeedbackService
 from app.services.rhythm_analysis_service import RhythmAnalysisService
 from app.config import get_settings
+from app.services.practice_progress_callback_client import PracticeProgressCallbackClient, ProgressJob
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class EvaluationService:
         audio_service: AudioService | None = None,
         rhythm_analysis_service: RhythmAnalysisService | None = None,
         feedback_service: FeedbackService | None = None,
+        callback_client: PracticeProgressCallbackClient | None = None,
     ) -> None:
         self.repository = repository
         self.session_factory = session_factory
@@ -50,6 +52,8 @@ class EvaluationService:
         self.execution = JobExecutionService()
         self.template_repository = TemplateAnalysisRepository()
         self.template_storage = ArtifactStorageService(get_settings().artifact_root)
+        self.callback_client = callback_client or PracticeProgressCallbackClient()
+        self._active_stage: ProgressJob | None = None
 
     async def process_task(self, task: EvaluationTask) -> None:
         await self.execution.run(lambda: self._process_task(task))
@@ -65,7 +69,12 @@ class EvaluationService:
         finally:
             session.close()
 
+        stage: ProgressJob = "quality_check"
+        self._active_stage = stage
         try:
+            await self._notify(task, stage, "started")
+            # Preserve the existing download order for non-cached jobs. The student
+            # quality gate still prevents any scoring work after a rejection.
             template = self._read_template_cache(task)
             if template is None:
                 teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
@@ -78,6 +87,16 @@ class EvaluationService:
             finally:
                 quality_session.close()
             self.quality_service.ensure_acceptable(quality)
+            await self._notify(task, stage, "done")
+
+            stage = "audio_analysis"
+            self._active_stage = stage
+            await self._notify(task, stage, "started")
+            await self._notify(task, stage, "done")
+
+            stage = "comparison"
+            self._active_stage = stage
+            await self._notify(task, stage, "started")
             if template is not None:
                 try:
                     result = await self.rhythm_analysis_service.evaluate_against_template(template, student_path, task.instrumentId)
@@ -87,6 +106,11 @@ class EvaluationService:
                     result = await self.rhythm_analysis_service.evaluate(teacher_path, student_path, task.instrumentId)
             else:
                 result = await self.rhythm_analysis_service.evaluate(teacher_path, student_path, task.instrumentId)
+            await self._notify(task, stage, "done")
+
+            stage = "feedback"
+            self._active_stage = stage
+            await self._notify(task, stage, "started")
             result["aiFeedback"] = await self.feedback_service.generate(result)
             result["studentAudioQuality"] = quality
             session = self.session_factory()
@@ -95,8 +119,25 @@ class EvaluationService:
                 self.repository.mark_completed(session, record, result)
             finally:
                 session.close()
+            await self._notify(task, stage, "done", result=result)
+        except AudioQualityError as error:
+            await self._notify(task, "quality_check", "rejected", code=error.code, reason=str(error))
+            raise
+        except Exception:
+            raise
         finally:
             shutil.rmtree(work_directory, ignore_errors=True)
+
+    async def report_final_failure(self, task: EvaluationTask, code: str, reason: str) -> None:
+        await self._notify(task, self._active_stage or "quality_check", "failed", code=code, reason=reason)
+
+    async def _notify(self, task: EvaluationTask, job: ProgressJob, status: str,
+                      *, code: str | None = None, reason: str | None = None,
+                      result: dict | None = None) -> None:
+        try:
+            await self.callback_client.send(task, job, status, code=code, reason=reason, result=result)
+        except Exception:
+            logger.exception("Unexpected error while delivering practice callback for %s", task.evaluationId)
 
     def _read_template_cache(self, task: EvaluationTask) -> dict | None:
         if task.templateAnalysisId is None:
@@ -123,14 +164,18 @@ class EvaluationService:
         except AudioQualityError as error:
             self.record_failure(task, error.code, str(error))
         except AudioProcessingError as error:
+            await self.report_final_failure(task, error.code, str(error))
             self.record_failure(task, error.code, str(error))
         except AudioDownloadError as error:
+            await self.report_final_failure(task, error.code, str(error))
             self.record_failure(task, error.code, str(error))
         except (ValueError, PermanentEvaluationError) as error:
             code = error.code if isinstance(error, PermanentEvaluationError) else "EVALUATION_FAILED"
+            await self.report_final_failure(task, code, str(error))
             self.record_failure(task, code, str(error))
         except Exception:
             logger.exception("Unexpected direct evaluation error for %s", task.evaluationId)
+            await self.report_final_failure(task, "INTERNAL_ERROR", "Internal evaluation error")
             self.record_failure(task, "INTERNAL_ERROR", "Lỗi nội bộ khi phân tích audio")
 
     def record_failure(self, task: EvaluationTask, code: str, error_message: str) -> None:
