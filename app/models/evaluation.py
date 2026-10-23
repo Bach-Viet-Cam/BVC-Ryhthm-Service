@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, JSON, String, Text, func
+from sqlalchemy import DateTime, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -13,6 +13,10 @@ class RhythmEvaluation(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     evaluation_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
+    stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    callback_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_state: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     template_url: Mapped[str] = mapped_column(Text)
     student_url: Mapped[str] = mapped_column(Text)
     instrument_id: Mapped[str] = mapped_column(String(64))

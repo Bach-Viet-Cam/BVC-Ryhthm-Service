@@ -5,7 +5,14 @@ from app.config import get_settings
 from app.database import SessionFactory, get_session, initialize_database
 from app.models.evaluation import RhythmEvaluation
 from app.repositories.evaluation_repository import EvaluationRepository
-from app.schemas.messages import EvaluationError, EvaluationRecordResponse, EvaluationTask
+from app.schemas.messages import (
+    EvaluationError,
+    EvaluationRecordResponse,
+    EvaluationTask,
+    JobCode,
+    JobReport,
+    RetryRequest,
+)
 from app.services.evaluation_service import EvaluationService
 
 
@@ -35,7 +42,7 @@ def create_app() -> FastAPI:
         repository = EvaluationRepository()
         record = repository.create_if_missing(session, task)
 
-        if record.status not in {"completed", "processing"}:
+        if record.status not in {"completed", "processing", "waiting"}:
             evaluation_service = EvaluationService(repository, SessionFactory, get_settings().temp_directory)
             background_tasks.add_task(evaluation_service.process_direct_task, task)
 
@@ -55,6 +62,61 @@ def create_app() -> FastAPI:
 
         return _to_response(record)
 
+    @app.post("/api/v1/evaluations/{evaluation_id}/jobs/{job}", response_model=EvaluationRecordResponse)
+    async def report_job(
+        evaluation_id: str,
+        job: JobCode,
+        report: JobReport,
+        background_tasks: BackgroundTasks,
+        authorization: str | None = Header(default=None),
+        session: Session = Depends(get_session),
+    ) -> EvaluationRecordResponse:
+        """Progress report of one job; external job runners (JOB-01) call this when they finish."""
+        _require_internal_auth(authorization)
+        if report.status == "rejected" and job != "quality_check":
+            raise HTTPException(status_code=422, detail="Only the quality check can reject a recording")
+        repository = EvaluationRepository()
+        if repository.get(session, evaluation_id) is None:
+            raise HTTPException(status_code=404, detail="Evaluation not found")
+
+        evaluation_service = EvaluationService(repository, SessionFactory, get_settings().temp_directory)
+        outcome = await evaluation_service.progress.report(evaluation_id, job, report)
+        if outcome is None:
+            raise HTTPException(status_code=409, detail="Report does not match the current attempt")
+        if outcome.next_job and outcome.next_task:
+            background_tasks.add_task(evaluation_service.run_guarded, outcome.next_task, outcome.next_job, report.attempt)
+
+        session.expire_all()
+        return _to_response(repository.get(session, evaluation_id))
+
+    @app.post(
+        "/api/v1/evaluations/{evaluation_id}/retry",
+        response_model=EvaluationRecordResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def retry_evaluation(
+        evaluation_id: str,
+        request: RetryRequest,
+        background_tasks: BackgroundTasks,
+        authorization: str | None = Header(default=None),
+        session: Session = Depends(get_session),
+    ) -> EvaluationRecordResponse:
+        """Start a new attempt from the job that failed (GBR-63)."""
+        _require_internal_auth(authorization)
+        repository = EvaluationRepository()
+        record = repository.get(session, evaluation_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Evaluation not found")
+        if record.status in {"completed", "rejected"} or request.attempt <= record.attempt:
+            raise HTTPException(status_code=409, detail="Evaluation cannot be retried")
+
+        repository.start_attempt(session, record, request.attempt)
+        evaluation_service = EvaluationService(repository, SessionFactory, get_settings().temp_directory)
+        background_tasks.add_task(
+            evaluation_service.run_guarded, repository.to_task(record), request.fromJob, request.attempt
+        )
+        return _to_response(record)
+
     return app
 
 
@@ -72,6 +134,8 @@ def _to_response(record: RhythmEvaluation) -> EvaluationRecordResponse:
     return EvaluationRecordResponse(
         evaluationId=record.evaluation_id,
         status=record.status,
+        stage=record.stage,
+        attempt=record.attempt,
         result=record.result_json,
         error=error,
     )

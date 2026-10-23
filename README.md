@@ -79,6 +79,30 @@ GET /api/v1/evaluations/{evaluationId}
 Authorization: Bearer <INTERNAL_API_KEY>
 ```
 
+### Job progress (practice submissions)
+
+Each evaluation runs four jobs in order: `quality_check` (JOB-01), `audio_analysis` (JOB-02),
+`comparison` (JOB-03) and `feedback` (JOB-04, Gemini). Every job event is stored (`stage`,
+`attempt`) and, when the task carries `callbackUrl`, POSTed to the backend with header
+`X-Callback-Secret: <CALLBACK_SECRET>`:
+
+```json
+{ "evaluationId": "...", "attempt": 1, "job": "audio_analysis", "status": "started", "code": null, "reason": null, "result": null }
+```
+
+```text
+POST /api/v1/evaluations/{evaluationId}/jobs/{job}   body: { "status": "started|done|failed|rejected", "attempt": 1, "code"?, "reason"? }
+POST /api/v1/evaluations/{evaluationId}/retry        body: { "fromJob": "feedback", "attempt": 2 }
+```
+
+- `QUALITY_CHECK_MODE=bypass` (default): JOB-01 passes immediately. With `external` the pipeline
+  waits (`status: waiting`) until the quality-check runner reports `quality_check` as `done`
+  (continues with JOB-02) or `rejected` (with `reason`).
+- A job running longer than `JOB_TIMEOUT_SECONDS` fails with `JOB_TIMEOUT`.
+- Tasks with `callbackUrl` are not retried automatically; the backend calls `/retry`, which starts
+  a new attempt from the failed job (a retry from `feedback` reuses the stored scores).
+  Reports carrying an older `attempt` are ignored (HTTP 409).
+
 Backend có thể gửi job trực tiếp qua HTTP:
 
 ```json

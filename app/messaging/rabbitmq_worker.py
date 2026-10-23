@@ -77,7 +77,8 @@ class RabbitMqWorker:
         retryable: bool,
     ) -> None:
         retry_count = int((message.headers or {}).get("x-retry-count", 0))
-        if retryable and retry_count < self.settings.max_retries:
+        # Practice tasks (with a callback) fail fast: the student retries them (GBR-59)
+        if retryable and task.callbackUrl is None and retry_count < self.settings.max_retries:
             assert self.connection is not None
             channel = await self.connection.channel()
             retry_message = Message(
@@ -91,5 +92,5 @@ class RabbitMqWorker:
             await message.ack()
             return
 
-        self.evaluation_service.record_failure(task, code, error_message)
+        await self.evaluation_service.record_failure(task, code, error_message)
         await message.ack()

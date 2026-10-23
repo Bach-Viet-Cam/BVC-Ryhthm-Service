@@ -369,6 +369,6 @@ async def test_http_create_process_and_get_result_with_actual_service(setup, mon
         fetched = await client.get("/api/v1/evaluations/evaluation-1", headers=headers)
         assert fetched.status_code == 200
         assert fetched.json() == {
-            "evaluationId": "evaluation-1", "status": "completed",
+            "evaluationId": "evaluation-1", "status": "completed", "stage": "feedback", "attempt": 1,
             "result": {"overallScore": 92, "aiFeedback": "finished"}, "error": None,
         }

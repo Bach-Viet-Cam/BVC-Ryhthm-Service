@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,6 +28,11 @@ class Settings(BaseSettings):
     max_retries: int = 3
     temp_directory: str = "/tmp/rhythm-service"
     allowed_hosts: str = ""
+    callback_secret: str = ""
+    callback_timeout_seconds: float = 5.0
+    callback_attempts: int = 3
+    job_timeout_seconds: float = 60.0
+    quality_check_mode: Literal["bypass", "external"] = "bypass"
 
     @property
     def allowed_host_values(self) -> set[str]:
