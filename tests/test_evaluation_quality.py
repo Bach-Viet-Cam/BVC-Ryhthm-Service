@@ -30,14 +30,17 @@ def setup(tmp_path, amplitude):
         level = amplitude if "student" in url else 0.2
         sf.write(path, level * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
         return path
-    async def evaluate(*args):
-        calls.append("evaluate")
+    async def analyze(path, instrument):
+        calls.append("analyze")
+        return {"path": path, "instrumentId": instrument}
+    async def compare(teacher, student):
+        calls.append("compare")
         return {"overallScore": 88, "pitchAccuracyPercent": 90, "rhythmAccuracyPercent": 85}
     async def feedback(result):
         calls.append("feedback")
         return "Tiếp tục luyện tập."
     service.audio_service = SimpleNamespace(download=download)
-    service.rhythm_analysis_service = SimpleNamespace(evaluate=evaluate)
+    service.rhythm_analysis_service = SimpleNamespace(analyze=analyze, compare=compare)
     service.feedback_service = SimpleNamespace(generate=feedback)
     return service, sessions, calls
 
@@ -130,16 +133,20 @@ async def test_completed_template_artifact_skips_template_download_and_uses_cach
         path = directory / "student.wav"
         sf.write(path, 0.2 * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
         return path
-    async def cached(template, student, instrument):
+    async def analyze(student, instrument):
+        return {"recording": "student", "instrumentId": instrument}
+    async def cached(template, instrument):
         assert template["analysisId"] == str(analysis.analysisId)
         assert instrument == "dan_bau"
+        return {"recording": "template", "instrumentId": instrument}
+    async def compare(template, student):
         return {"overallScore": 91, "pitchAccuracyPercent": 92, "rhythmAccuracyPercent": 90}
     async def unexpected(*args):
         pytest.fail("Cache hit must not evaluate or download the template")
 
     service.template_storage = storage
     service.audio_service = SimpleNamespace(download=download)
-    service.rhythm_analysis_service = SimpleNamespace(evaluate=unexpected, evaluate_against_template=cached)
+    service.rhythm_analysis_service = SimpleNamespace(analyze=analyze, analyze_template=cached, compare=compare)
     payload = task(templateAnalysisId=analysis.analysisId)
     await service.process_direct_task(payload)
 
@@ -158,12 +165,14 @@ async def test_missing_template_artifact_falls_back_to_the_legacy_pair_evaluatio
         path = directory / ("student.wav" if "student" in str(url) else "teacher.wav")
         sf.write(path, 0.2 * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
         return path
-    async def legacy(*args):
+    async def analyze(path, instrument):
+        return {"path": path, "instrumentId": instrument}
+    async def compare(teacher, student):
         return {"overallScore": 80, "pitchAccuracyPercent": 80, "rhythmAccuracyPercent": 80}
     service.audio_service = SimpleNamespace(download=download)
-    service.rhythm_analysis_service = SimpleNamespace(evaluate=legacy, evaluate_against_template=lambda *args: pytest.fail("unexpected cache hit"))
+    service.rhythm_analysis_service = SimpleNamespace(analyze=analyze, compare=compare, analyze_template=lambda *args: pytest.fail("unexpected cache hit"))
     await service.process_direct_task(task(templateAnalysisId=uuid4()))
-    assert downloads == ["https://example.com/teacher.wav", "https://example.com/student.wav"]
+    assert downloads == ["https://example.com/student.wav", "https://example.com/teacher.wav"]
 
 
 @pytest.mark.asyncio
@@ -183,7 +192,7 @@ async def test_student_quality_is_persisted_and_only_reject_prevents_scoring(tmp
         else:
             assert saved.result_json["overallScore"] == 88
             assert saved.result_json["studentAudioQuality"]["verdict"] == verdict
-            assert calls == ["evaluate", "feedback"]
+            assert calls == ["analyze", "analyze", "compare", "feedback"]
 
 
 @pytest.mark.asyncio

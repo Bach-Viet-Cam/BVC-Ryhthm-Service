@@ -73,11 +73,7 @@ class EvaluationService:
         self._active_stage = stage
         try:
             await self._notify(task, stage, "started")
-            # Preserve the existing download order for non-cached jobs. The student
-            # quality gate still prevents any scoring work after a rejection.
             template = self._read_template_cache(task)
-            if template is None:
-                teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
             student_path = await self.audio_service.download(str(task.studentUrl), work_directory)
             quality = await self.quality_service.inspect(student_path)
             quality_session = self.session_factory()
@@ -92,6 +88,7 @@ class EvaluationService:
             stage = "audio_analysis"
             self._active_stage = stage
             await self._notify(task, stage, "started")
+            student_analysis = await self.rhythm_analysis_service.analyze(student_path, task.instrumentId)
             await self._notify(task, stage, "done")
 
             stage = "comparison"
@@ -99,13 +96,15 @@ class EvaluationService:
             await self._notify(task, stage, "started")
             if template is not None:
                 try:
-                    result = await self.rhythm_analysis_service.evaluate_against_template(template, student_path, task.instrumentId)
+                    teacher_analysis = await self.rhythm_analysis_service.analyze_template(template, task.instrumentId)
                 except (KeyError, TypeError, ValueError):
                     # A stale/corrupt artifact must never block a student's submission.
                     teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
-                    result = await self.rhythm_analysis_service.evaluate(teacher_path, student_path, task.instrumentId)
+                    teacher_analysis = await self.rhythm_analysis_service.analyze(teacher_path, task.instrumentId)
             else:
-                result = await self.rhythm_analysis_service.evaluate(teacher_path, student_path, task.instrumentId)
+                teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
+                teacher_analysis = await self.rhythm_analysis_service.analyze(teacher_path, task.instrumentId)
+            result = await self.rhythm_analysis_service.compare(teacher_analysis, student_analysis)
             await self._notify(task, stage, "done")
 
             stage = "feedback"

@@ -28,6 +28,16 @@ from app.schemas.messages import EvaluationTask
 PASS_QUALITY = {"verdict": "PASS"}
 
 
+def analysis_stub(result):
+    async def analyze(path, instrument):
+        return {"path": path, "instrumentId": instrument}
+
+    async def compare(teacher, student):
+        return result
+
+    return SimpleNamespace(analyze=analyze, compare=compare)
+
+
 def task(suffix="one"):
     return EvaluationTask(
         messageId=f"message-{suffix}", evaluationId="evaluation-1",
@@ -60,14 +70,19 @@ def record(sessions):
 async def test_success_pipeline_and_persistence(setup, monkeypatch):
     worker, sessions = setup
     downloads = []
-    evaluations = []
+    analyses = []
 
     async def download(url, directory):
         downloads.append((url, directory))
         return directory / f"{len(downloads)}.audio"
 
-    async def evaluate(teacher, student, instrument):
-        evaluations.append((teacher, student, instrument))
+    async def analyze(path, instrument):
+        analyses.append((path, instrument))
+        return {"path": path, "instrumentId": instrument}
+
+    async def compare(teacher, student):
+        assert teacher["path"] == downloads[1][1] / "2.audio"
+        assert student["path"] == downloads[0][1] / "1.audio"
         return {"overallScore": 87}
 
     async def feedback(result):
@@ -75,7 +90,7 @@ async def test_success_pipeline_and_persistence(setup, monkeypatch):
         return "Good practice"
 
     worker.evaluation_service.audio_service = SimpleNamespace(download=download)
-    worker.evaluation_service.rhythm_analysis_service = SimpleNamespace(evaluate=evaluate)
+    worker.evaluation_service.rhythm_analysis_service = SimpleNamespace(analyze=analyze, compare=compare)
     worker.evaluation_service.feedback_service = SimpleNamespace(generate=feedback)
     await worker.evaluation_service.process_task(task())
 
@@ -83,8 +98,8 @@ async def test_success_pipeline_and_persistence(setup, monkeypatch):
     assert saved.status == "completed"
     assert saved.result_json == {"overallScore": 87, "aiFeedback": "Good practice", "studentAudioQuality": PASS_QUALITY}
     assert saved.started_at is not None and saved.completed_at is not None
-    assert [url for url, _ in downloads] == [str(task().templateUrl), str(task().studentUrl)]
-    assert evaluations == [(downloads[0][1] / "1.audio", downloads[1][1] / "2.audio", "dan_bau")]
+    assert [url for url, _ in downloads] == [str(task().studentUrl), str(task().templateUrl)]
+    assert analyses == [(downloads[0][1] / "1.audio", "dan_bau"), (downloads[1][1] / "2.audio", "dan_bau")]
     assert downloads[0][1] == downloads[1][1]
     assert not downloads[0][1].exists()
 
@@ -102,14 +117,14 @@ async def test_direct_download_failure_is_persisted(setup, monkeypatch):
         pytest.fail("evaluation must not run")
 
     worker.evaluation_service.audio_service = SimpleNamespace(download=fail)
-    worker.evaluation_service.rhythm_analysis_service = SimpleNamespace(evaluate=unexpected_evaluation)
+    worker.evaluation_service.rhythm_analysis_service = analysis_stub({"overallScore": 0})
     await worker.evaluation_service.process_direct_task(task())
 
     saved = record(sessions)
     assert (saved.status, saved.error_code, saved.error_message) == (
         "failed", "AUDIO_DOWNLOAD_FAILED", "download failed")
     assert saved.result_json is None
-    assert calls == [str(task().templateUrl)]
+    assert calls == [str(task().studentUrl)]
 
 
 class FakeMessage:
@@ -174,14 +189,14 @@ async def test_repeated_id_status_behavior_and_original_metadata(setup, monkeypa
         return {"overallScore": 88}
 
     worker.evaluation_service.audio_service = SimpleNamespace(download=download)
-    worker.evaluation_service.rhythm_analysis_service = SimpleNamespace(evaluate=evaluate)
+    worker.evaluation_service.rhythm_analysis_service = analysis_stub({"overallScore": 88})
     worker.evaluation_service.feedback_service = SimpleNamespace(generate=feedback)
     with sessions() as session:
         saved = worker.repository.create_if_missing(session, task())
         worker.repository.mark_failed(session, saved, "OLD_ERROR", "old failure")
 
     await worker.evaluation_service.process_task(task("two"))
-    assert downloaded == [str(task("two").templateUrl), str(task("two").studentUrl)]
+    assert downloaded == [str(task("two").studentUrl), str(task("two").templateUrl)]
     saved = record(sessions)
     assert saved.status == "completed"
     assert saved.template_url == str(task().templateUrl)
@@ -284,7 +299,7 @@ async def test_processing_closes_sessions_during_external_work_and_isolates_temp
         return "done"
 
     worker.evaluation_service.audio_service = SimpleNamespace(download=download)
-    worker.evaluation_service.rhythm_analysis_service = SimpleNamespace(evaluate=evaluate)
+    worker.evaluation_service.rhythm_analysis_service = analysis_stub({"overallScore": 90})
     worker.evaluation_service.feedback_service = SimpleNamespace(generate=feedback)
 
     await worker.evaluation_service.process_task(task())
@@ -316,7 +331,7 @@ async def test_rabbitmq_success_acks_after_result_is_stored(setup):
         return "done"
 
     worker.evaluation_service.audio_service = SimpleNamespace(download=download)
-    worker.evaluation_service.rhythm_analysis_service = SimpleNamespace(evaluate=evaluate)
+    worker.evaluation_service.rhythm_analysis_service = analysis_stub({"overallScore": 91})
     worker.evaluation_service.feedback_service = SimpleNamespace(generate=feedback)
     message = FakeMessage(task())
 
@@ -357,7 +372,7 @@ async def test_http_create_process_and_get_result_with_actual_service(setup, mon
         return "finished"
 
     worker.evaluation_service.audio_service = SimpleNamespace(download=download)
-    worker.evaluation_service.rhythm_analysis_service = SimpleNamespace(evaluate=evaluate)
+    worker.evaluation_service.rhythm_analysis_service = analysis_stub({"overallScore": 92})
     worker.evaluation_service.feedback_service = SimpleNamespace(generate=feedback)
     monkeypatch.setattr(api, "EvaluationService", lambda *args: worker.evaluation_service)
     monkeypatch.setattr(api, "get_settings", lambda: SimpleNamespace(internal_api_key="secret", temp_directory="unused"))
