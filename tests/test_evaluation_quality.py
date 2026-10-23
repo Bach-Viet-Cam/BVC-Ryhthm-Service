@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -46,6 +47,22 @@ def task(**changes):
                   templateUrl="https://example.com/teacher.wav", studentUrl="https://example.com/student.wav", instrumentId="dan_bau")
     values.update(changes)
     return EvaluationTask(**values)
+
+
+def test_unsupported_instrument_is_normalized_to_fallback():
+    assert task(instrumentId="unknown").instrumentId == "khong_ho_tro"
+
+
+def test_legacy_evaluator_falls_back_for_an_unknown_instrument(monkeypatch):
+    from app.evaluation import evaluator
+
+    monkeypatch.setattr(evaluator, "_extract_f0", lambda *_: np.array([220.0, 220.0]))
+    monkeypatch.setattr(evaluator, "_estimate_tempo", lambda _: 100.0)
+
+    result = evaluator.evaluate_pair(Path("teacher.wav"), Path("student.wav"), "unknown")
+
+    assert result["instrumentId"] == "khong_ho_tro"
+    assert result["instrument"] == "Không hỗ trợ"
 
 
 @pytest.mark.asyncio

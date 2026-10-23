@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.database import get_session
+from app.evaluation.instruments import normalize_instrument_id
 from app.models.template_analysis import TemplateAnalysis
 from app.repositories.template_analysis_repository import TemplateAnalysisRepository
 from app.services.artifact_storage_service import ArtifactStorageService, ArtifactUnavailableError
@@ -54,7 +55,7 @@ def create_template_router(require_auth: Callable[[str | None], None]) -> APIRou
         analysis_version: str = Query(alias="analysisVersion", min_length=1, max_length=64),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        record = repository.lookup(session, str(sheet_music_id), str(media_file_id), instrument_code, analysis_version)
+        record = repository.lookup(session, str(sheet_music_id), str(media_file_id), normalize_instrument_id(instrument_code), analysis_version)
         if record is None:
             raise HTTPException(status_code=404, detail={"code": "TEMPLATE_NOT_FOUND", "message": "Chưa có kết quả cho MAIN, audio và phiên bản phân tích này."})
         if record.status != "completed":

@@ -3,7 +3,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from app.evaluation.instruments import get_instrument
+from app.evaluation.instruments import get_instrument, normalize_instrument_id
 
 SAMPLE_RATE = 22050
 HOP_LENGTH = 512
@@ -134,13 +134,14 @@ def _estimate_tempo(audio_path: Path) -> float:
 
 
 def evaluate_pair(teacher_path: Path, student_path: Path, instrument_id: str) -> dict:
-    instrument = get_instrument(instrument_id)
+    normalized_instrument_id = normalize_instrument_id(instrument_id)
+    instrument = get_instrument(normalized_instrument_id)
     fmin = float(instrument["fmin"])
     fmax = float(instrument["fmax"])
     teacher_f0 = _extract_f0(teacher_path, fmin, fmax)
     student_f0 = _extract_f0(student_path, fmin, fmax)
     result = _score_pitch_and_rhythm(student_f0, teacher_f0, float(instrument["toleranceCents"]))
-    result["instrumentId"] = instrument_id
+    result["instrumentId"] = normalized_instrument_id
     result["instrument"] = instrument["name"]
     result["teacherTempoBpm"] = _estimate_tempo(teacher_path)
     result["studentTempoBpm"] = _estimate_tempo(student_path)
@@ -149,11 +150,12 @@ def evaluate_pair(teacher_path: Path, student_path: Path, instrument_id: str) ->
 
 def evaluate_against_template(template: dict, student_path: Path, instrument_id: str) -> dict:
     """Evaluate a student recording using the persisted features of a template."""
-    instrument = get_instrument(instrument_id)
+    normalized_instrument_id = normalize_instrument_id(instrument_id)
+    instrument = get_instrument(normalized_instrument_id)
     template_instrument = template.get("instrument")
     pitch = template.get("pitch")
     rhythm = template.get("rhythm")
-    if not isinstance(template_instrument, dict) or template_instrument.get("code") != instrument_id:
+    if not isinstance(template_instrument, dict) or template_instrument.get("code") != normalized_instrument_id:
         raise ValueError("Template analysis khÃ´ng khá»›p nháº¡c cá»¥.")
     if not isinstance(pitch, dict) or pitch.get("sampleRate") != SAMPLE_RATE or pitch.get("hopLength") != HOP_LENGTH:
         raise ValueError("Template analysis khÃ´ng tÆ°Æ¡ng thÃ­ch phiÃªn báº£n chÃ¢m Ä‘iá»ƒm.")
@@ -169,7 +171,7 @@ def evaluate_against_template(template: dict, student_path: Path, instrument_id:
         raise ValueError("Template analysis chứa giÃ¡ trá»‹ khÃ´ng hợp lá»‡.")
     student_f0 = _extract_f0(student_path, float(instrument["fmin"]), float(instrument["fmax"]))
     result = _score_pitch_and_rhythm(student_f0, teacher_f0, float(instrument["toleranceCents"]))
-    result["instrumentId"] = instrument_id
+    result["instrumentId"] = normalized_instrument_id
     result["instrument"] = instrument["name"]
     result["teacherTempoBpm"] = round(teacher_tempo, 1)
     result["studentTempoBpm"] = _estimate_tempo(student_path)

@@ -2,7 +2,9 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field, field_validator
+
+from app.evaluation.instruments import normalize_instrument_id
 
 
 class EvaluationTask(BaseModel):
@@ -15,6 +17,11 @@ class EvaluationTask(BaseModel):
     callbackUrl: AnyHttpUrl | None = None
     attempt: int = Field(default=1, ge=1)
     requestedAt: datetime | None = None
+
+    @field_validator("instrumentId")
+    @classmethod
+    def normalize_instrument(cls, value: str) -> str:
+        return normalize_instrument_id(value)
 
 
 class EvaluationError(BaseModel):
