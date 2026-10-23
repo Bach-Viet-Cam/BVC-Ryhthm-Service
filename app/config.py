@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,15 +19,33 @@ class Settings(BaseSettings):
     rabbitmq_url: str = "amqp://bvc:bvc-secret@localhost:5672/"
     rhythm_task_queue: str = "rhythm.evaluate.v1"
     rhythm_dead_letter_queue: str = "rhythm.evaluate.dlq"
+    template_task_queue: str = "rhythm.template.analyze.v1"
+    template_dead_letter_queue: str = "rhythm.template.analyze.dlq"
+    artifact_root: str = "/data/rhythm-artifacts"
     internal_api_key: str = "change-me"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     gemini_timeout_seconds: float = 30.0
     max_file_bytes: int = 25 * 1024 * 1024
     download_timeout_seconds: float = 60.0
-    max_retries: int = 3
+    max_retries: int = Field(default=3, ge=0)
     temp_directory: str = "/tmp/rhythm-service"
     allowed_hosts: str = ""
+
+    @field_validator("rhythm_task_queue", "rhythm_dead_letter_queue", "template_task_queue", "template_dead_letter_queue", "artifact_root")
+    @classmethod
+    def require_nonempty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Tên hàng đợi và thư mục lưu trữ không được để trống.")
+        return value
+
+    @model_validator(mode="after")
+    def require_distinct_queues(self) -> "Settings":
+        queues = [self.rhythm_task_queue, self.rhythm_dead_letter_queue, self.template_task_queue, self.template_dead_letter_queue]
+        if len(set(queues)) != len(queues):
+            raise ValueError("Các hàng đợi so sánh, template và dead-letter phải có tên khác nhau.")
+        return self
 
     @property
     def allowed_host_values(self) -> set[str]:

@@ -5,6 +5,7 @@ from app.config import get_settings
 from app.database import SessionFactory, get_session, initialize_database
 from app.models.evaluation import RhythmEvaluation
 from app.repositories.evaluation_repository import EvaluationRepository
+from app.routes.template_analysis_routes import create_template_router
 from app.schemas.messages import EvaluationError, EvaluationRecordResponse, EvaluationTask
 from app.services.evaluation_service import EvaluationService
 
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
 
         return _to_response(record)
 
+    app.include_router(create_template_router(_require_internal_auth))
     return app
 
 
@@ -62,7 +64,7 @@ def _require_internal_auth(authorization: str | None) -> None:
     settings = get_settings()
     expected = f"Bearer {settings.internal_api_key}"
     if not settings.internal_api_key or authorization != expected:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Không có quyền truy cập dịch vụ nội bộ.")
 
 
 def _to_response(record: RhythmEvaluation) -> EvaluationRecordResponse:

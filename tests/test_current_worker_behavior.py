@@ -15,12 +15,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.config import Settings
+from app.services.audio_quality_service import AudioQualityService
 from app.database import Base
 from app import api
 from app.database import get_session
 from app.messaging import rabbitmq_worker as module
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.schemas.messages import EvaluationTask
+
+
+PASS_QUALITY = {"verdict": "PASS"}
 
 
 def task(suffix="one"):
@@ -37,8 +42,11 @@ def setup(monkeypatch, tmp_path):
     Base.metadata.create_all(engine)
     sessions = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr(module, "SessionFactory", sessions)
-    monkeypatch.setattr(module, "get_settings", lambda: SimpleNamespace(
-        temp_directory=str(tmp_path), max_retries=2, rhythm_task_queue="tasks"))
+    monkeypatch.setattr(module, "get_settings", lambda: Settings(
+        _env_file=None, temp_directory=str(tmp_path), max_retries=2, rhythm_task_queue="tasks", artifact_root=str(tmp_path / "artifacts")))
+    async def quality(self, path, policy=None):
+        return dict(PASS_QUALITY)
+    monkeypatch.setattr(AudioQualityService, "inspect", quality)
     yield module.RabbitMqWorker(), sessions
     engine.dispose()
 
@@ -73,7 +81,7 @@ async def test_success_pipeline_and_persistence(setup, monkeypatch):
 
     saved = record(sessions)
     assert saved.status == "completed"
-    assert saved.result_json == {"overallScore": 87, "aiFeedback": "Good practice"}
+    assert saved.result_json == {"overallScore": 87, "aiFeedback": "Good practice", "studentAudioQuality": PASS_QUALITY}
     assert saved.started_at is not None and saved.completed_at is not None
     assert [url for url, _ in downloads] == [str(task().templateUrl), str(task().studentUrl)]
     assert evaluations == [(downloads[0][1] / "1.audio", downloads[1][1] / "2.audio", "dan_bau")]
@@ -123,8 +131,8 @@ async def test_rabbitmq_retry_then_failure_at_limit(setup, monkeypatch):
         raise module.AudioDownloadError("AUDIO_DOWNLOAD_FAILED", "temporary", retryable=True)
 
     class Connection:
-        async def channel(self):
-            async def publish(message, *, routing_key):
+        async def channel(self, **kwargs):
+            async def publish(message, *, routing_key, mandatory=True):
                 published.append((message, routing_key))
 
             async def close():
@@ -291,7 +299,7 @@ async def test_processing_closes_sessions_during_external_work_and_isolates_temp
     assert directories[0] != directories[2]
     assert all(not directory.exists() for directory in set(directories))
     assert all(session.closed for session in opened)
-    assert record(sessions).result_json == {"overallScore": 90, "aiFeedback": "done"}
+    assert record(sessions).result_json == {"overallScore": 90, "aiFeedback": "done", "studentAudioQuality": PASS_QUALITY}
 
 
 @pytest.mark.asyncio
@@ -314,7 +322,7 @@ async def test_rabbitmq_success_acks_after_result_is_stored(setup):
 
     async def ack():
         assert record(sessions).status == "completed"
-        assert record(sessions).result_json == {"overallScore": 91, "aiFeedback": "done"}
+        assert record(sessions).result_json == {"overallScore": 91, "aiFeedback": "done", "studentAudioQuality": PASS_QUALITY}
         message.acked += 1
 
     message.ack = ack
@@ -370,5 +378,5 @@ async def test_http_create_process_and_get_result_with_actual_service(setup, mon
         assert fetched.status_code == 200
         assert fetched.json() == {
             "evaluationId": "evaluation-1", "status": "completed",
-            "result": {"overallScore": 92, "aiFeedback": "finished"}, "error": None,
+            "result": {"overallScore": 92, "aiFeedback": "finished", "studentAudioQuality": PASS_QUALITY}, "error": None,
         }

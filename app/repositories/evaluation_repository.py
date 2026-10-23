@@ -32,8 +32,15 @@ class EvaluationRepository:
     def mark_processing(self, session: Session, record: RhythmEvaluation) -> None:
         record.status = "processing"
         record.started_at = datetime.now(timezone.utc)
+        record.result_json = None
+        record.student_quality_report = None
+        record.completed_at = None
         record.error_code = None
         record.error_message = None
+        session.commit()
+
+    def save_quality(self, session: Session, record: RhythmEvaluation, report: dict[str, Any]) -> None:
+        record.student_quality_report = report
         session.commit()
 
     def mark_completed(self, session: Session, record: RhythmEvaluation, result: dict[str, Any]) -> None:
@@ -44,6 +51,7 @@ class EvaluationRepository:
 
     def mark_failed(self, session: Session, record: RhythmEvaluation, code: str, message: str) -> None:
         record.status = "failed"
+        record.result_json = None
         record.error_code = code
         record.error_message = message
         record.completed_at = datetime.now(timezone.utc)
