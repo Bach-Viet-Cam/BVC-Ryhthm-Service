@@ -1,4 +1,4 @@
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -7,6 +7,7 @@ from app.models.evaluation import RhythmEvaluation
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.routes.template_analysis_routes import create_template_router
 from app.schemas.messages import EvaluationError, EvaluationRecordResponse, EvaluationTask
+from app.services.artifact_storage_service import ArtifactStorageService, ArtifactUnavailableError
 from app.services.evaluation_service import EvaluationService
 
 
@@ -55,6 +56,28 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Evaluation not found")
 
         return _to_response(record)
+
+    @app.get("/api/v1/evaluations/{evaluation_id}/analysis")
+    def get_evaluation_analysis(
+        evaluation_id: str,
+        authorization: str | None = Header(default=None),
+        session: Session = Depends(get_session),
+    ) -> Response:
+        _require_internal_auth(authorization)
+
+        record = EvaluationRepository().get(session, evaluation_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Evaluation not found")
+        if record.status != "completed":
+            raise HTTPException(status_code=409, detail={"code": "EVALUATION_NOT_READY", "message": "Kết quả đánh giá chưa sẵn sàng."})
+        try:
+            if not record.analysis_artifact_key or not record.analysis_artifact_sha256:
+                raise ArtifactUnavailableError("Thiếu thông tin file phân tích.")
+            content = ArtifactStorageService(get_settings().artifact_root).read(
+                record.analysis_artifact_key, record.analysis_artifact_sha256)
+        except ArtifactUnavailableError:
+            raise HTTPException(status_code=503, detail={"code": "ARTIFACT_UNAVAILABLE", "message": "Chưa thể đọc file phân tích của bản thu."}) from None
+        return Response(content, media_type="application/json", headers={"Cache-Control": "private, no-store"})
 
     app.include_router(create_template_router(_require_internal_auth))
     return app

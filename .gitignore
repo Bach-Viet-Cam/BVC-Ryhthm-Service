@@ -8,3 +8,4 @@ __pycache__/
 
 # Local template analysis JSON files
 artifacts/
+docs/CHANGES-2026-10-24.md

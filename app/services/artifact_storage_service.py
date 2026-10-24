@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -26,7 +27,15 @@ class ArtifactStorageService:
         return target
 
     def write(self, task: TemplateAnalysisTask, document: dict[str, Any]) -> dict[str, Any]:
-        key = f"template-analyses/{task.sheetMusicId}/{task.mediaFileId}/{task.analysisId}/result.json"
+        return self._write(f"template-analyses/{task.sheetMusicId}/{task.mediaFileId}/{task.analysisId}/result.json", document)
+
+    def write_evaluation(self, evaluation_id: str, attempt: int, document: dict[str, Any]) -> dict[str, Any]:
+        # Evaluation ids come from the queue message, so they must not be able to shape the path
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", evaluation_id):
+            raise ArtifactUnavailableError("Mã đánh giá không hợp lệ để lưu file phân tích.")
+        return self._write(f"evaluations/{evaluation_id}/attempt-{attempt}/analysis.json", document)
+
+    def _write(self, key: str, document: dict[str, Any]) -> dict[str, Any]:
         target = self._resolve(key)
         content = json.dumps(document, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
         target.parent.mkdir(parents=True, exist_ok=True)

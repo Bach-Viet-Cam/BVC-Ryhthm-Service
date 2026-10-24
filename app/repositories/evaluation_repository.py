@@ -34,6 +34,8 @@ class EvaluationRepository:
         record.started_at = datetime.now(timezone.utc)
         record.result_json = None
         record.student_quality_report = None
+        record.analysis_artifact_key = None
+        record.analysis_artifact_sha256 = None
         record.completed_at = None
         record.error_code = None
         record.error_message = None
@@ -43,9 +45,12 @@ class EvaluationRepository:
         record.student_quality_report = report
         session.commit()
 
-    def mark_completed(self, session: Session, record: RhythmEvaluation, result: dict[str, Any]) -> None:
+    def mark_completed(self, session: Session, record: RhythmEvaluation, result: dict[str, Any],
+                       artifact: dict[str, Any] | None = None) -> None:
         record.status = "completed"
         record.result_json = result
+        record.analysis_artifact_key = artifact["key"] if artifact else None
+        record.analysis_artifact_sha256 = artifact["sha256"] if artifact else None
         record.completed_at = datetime.now(timezone.utc)
         session.commit()
 

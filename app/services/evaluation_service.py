@@ -1,5 +1,6 @@
 """Coordinate one evaluation while preserving the existing task lifecycle."""
 
+import asyncio
 import logging
 import json
 import shutil
@@ -10,6 +11,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.audio.downloader import AudioDownloadError
+from app.evaluation.evaluator import HOP_LENGTH, SAMPLE_RATE
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.repositories.template_analysis_repository import TemplateAnalysisRepository
 from app.schemas.messages import EvaluationTask
@@ -94,9 +96,11 @@ class EvaluationService:
             stage = "comparison"
             self._active_stage = stage
             await self._notify(task, stage, "started")
+            used_template = False
             if template is not None:
                 try:
                     teacher_analysis = await self.rhythm_analysis_service.analyze_template(template, task.instrumentId)
+                    used_template = True
                 except (KeyError, TypeError, ValueError):
                     # A stale/corrupt artifact must never block a student's submission.
                     teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
@@ -105,6 +109,7 @@ class EvaluationService:
                 teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
                 teacher_analysis = await self.rhythm_analysis_service.analyze(teacher_path, task.instrumentId)
             result = await self.rhythm_analysis_service.compare(teacher_analysis, student_analysis)
+            analysis = result.pop("_analysis", None)
             await self._notify(task, stage, "done")
 
             stage = "feedback"
@@ -112,10 +117,13 @@ class EvaluationService:
             await self._notify(task, stage, "started")
             result["aiFeedback"] = await self.feedback_service.generate(result)
             result["studentAudioQuality"] = quality
+            artifact = await self._write_analysis(task, analysis, result, used_template)
+            if artifact:
+                result["analysisArtifactUrl"] = f"/api/v1/evaluations/{task.evaluationId}/analysis"
             session = self.session_factory()
             try:
                 record = self.repository.get(session, task.evaluationId)
-                self.repository.mark_completed(session, record, result)
+                self.repository.mark_completed(session, record, result, artifact)
             finally:
                 session.close()
             await self._notify(task, stage, "done", result=result)
@@ -137,6 +145,25 @@ class EvaluationService:
             await self.callback_client.send(task, job, status, code=code, reason=reason, result=result)
         except Exception:
             logger.exception("Unexpected error while delivering practice callback for %s", task.evaluationId)
+
+    async def _write_analysis(self, task: EvaluationTask, analysis: dict | None, result: dict,
+                              used_template: bool) -> dict | None:
+        """Persist the pitch data behind the comparison; the chart is optional, so failures only log."""
+        if analysis is None:
+            return None
+        document = {
+            "schemaVersion": 1, "evaluationId": task.evaluationId, "attempt": task.attempt,
+            "templateAnalysisId": str(task.templateAnalysisId) if used_template else None,
+            "pitch": {"sampleRate": SAMPLE_RATE, "hopLength": HOP_LENGTH,
+                      "teacherF0Hz": analysis["teacherF0Hz"], "studentF0Hz": analysis["studentF0Hz"]},
+            "rhythm": {"teacherTempoBpm": result.get("teacherTempoBpm"), "studentTempoBpm": result.get("studentTempoBpm")},
+            "alignment": {"studentFrameByTeacherFrame": analysis["studentFrameByTeacherFrame"]},
+        }
+        try:
+            return await asyncio.to_thread(self.template_storage.write_evaluation, task.evaluationId, task.attempt, document)
+        except (ArtifactUnavailableError, OSError, ValueError, TypeError):
+            logger.exception("Could not store the analysis artifact for %s", task.evaluationId)
+            return None
 
     def _read_template_cache(self, task: EvaluationTask) -> dict | None:
         if task.templateAnalysisId is None:

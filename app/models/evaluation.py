@@ -18,6 +18,8 @@ class RhythmEvaluation(Base):
     instrument_id: Mapped[str] = mapped_column(String(64))
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     student_quality_report: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    analysis_artifact_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    analysis_artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

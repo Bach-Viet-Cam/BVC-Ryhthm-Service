@@ -23,6 +23,24 @@ def _to_cents_sequence(f0: np.ndarray) -> np.ndarray:
     return sequence
 
 
+def _student_frame_by_teacher_frame(path: np.ndarray, teacher_length: int) -> list[int]:
+    """Median aligned student frame for every teacher frame, kept monotonic for time mapping."""
+    buckets: list[list[int]] = [[] for _ in range(teacher_length)]
+    for student_index, teacher_index in path:
+        buckets[int(teacher_index)].append(int(student_index))
+    frames: list[int] = []
+    last = 0
+    for students in buckets:
+        if students:
+            last = max(last, int(np.median(students)))
+        frames.append(last)
+    return frames
+
+
+def _f0_to_json(f0: np.ndarray) -> list[float | None]:
+    return [round(float(value), 2) if np.isfinite(value) else None for value in f0]
+
+
 def _score_pitch_and_rhythm(student_f0: np.ndarray, teacher_f0: np.ndarray, tolerance_cents: float) -> dict:
     _, warping_path = librosa.sequence.dtw(
         X=_to_cents_sequence(student_f0).reshape(1, -1),
@@ -124,6 +142,8 @@ def _score_pitch_and_rhythm(student_f0: np.ndarray, teacher_f0: np.ndarray, tole
         "passedFrames": passed_frames,
         "rhythmSegments": rhythm_segments,
         "pitchErrorSegments": processed_errors[:5],
+        # Internal: popped by the caller, never stored in the result JSON
+        "_studentFrames": _student_frame_by_teacher_frame(path, len(teacher_f0)),
     }
 
 
@@ -155,6 +175,12 @@ def compare_recordings(teacher: dict, student: dict) -> dict:
     result["instrument"] = student["instrument"]
     result["teacherTempoBpm"] = round(float(teacher["tempoBpm"]), 1)
     result["studentTempoBpm"] = round(float(student["tempoBpm"]), 1)
+    # Internal: the evaluation service persists it as the analysis artifact and removes it from the result
+    result["_analysis"] = {
+        "teacherF0Hz": _f0_to_json(teacher["f0"]),
+        "studentF0Hz": _f0_to_json(student["f0"]),
+        "studentFrameByTeacherFrame": result.pop("_studentFrames"),
+    }
     return result
 
 
@@ -191,6 +217,7 @@ def evaluate_pair(teacher_path: Path, student_path: Path, instrument_id: str) ->
     teacher_f0 = _extract_f0(teacher_path, fmin, fmax)
     student_f0 = _extract_f0(student_path, fmin, fmax)
     result = _score_pitch_and_rhythm(student_f0, teacher_f0, float(instrument["toleranceCents"]))
+    result.pop("_studentFrames")
     result["instrumentId"] = normalized_instrument_id
     result["instrument"] = instrument["name"]
     result["teacherTempoBpm"] = _estimate_tempo(teacher_path)
@@ -221,6 +248,7 @@ def evaluate_against_template(template: dict, student_path: Path, instrument_id:
         raise ValueError("Template analysis chứa giÃ¡ trá»‹ khÃ´ng hợp lá»‡.")
     student_f0 = _extract_f0(student_path, float(instrument["fmin"]), float(instrument["fmax"]))
     result = _score_pitch_and_rhythm(student_f0, teacher_f0, float(instrument["toleranceCents"]))
+    result.pop("_studentFrames")
     result["instrumentId"] = normalized_instrument_id
     result["instrument"] = instrument["name"]
     result["teacherTempoBpm"] = round(teacher_tempo, 1)
