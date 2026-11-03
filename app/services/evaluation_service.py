@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.audio.downloader import AudioDownloadError
+from app.feedback.gemini_feedback import FeedbackGenerationError
 from app.evaluation.evaluator import HOP_LENGTH, SAMPLE_RATE, score_baseline, slice_recording
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.repositories.template_analysis_repository import TemplateAnalysisRepository
@@ -222,6 +223,9 @@ class EvaluationService:
         try:
             await self.process_task(task)
         except AudioQualityError as error:
+            self.record_failure(task, error.code, str(error))
+        except FeedbackGenerationError as error:
+            await self.report_final_failure(task, error.code, str(error))
             self.record_failure(task, error.code, str(error))
         except AudioProcessingError as error:
             await self.report_final_failure(task, error.code, str(error))

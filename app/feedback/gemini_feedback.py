@@ -9,6 +9,12 @@ from app.config import get_settings
 FALLBACK_FEEDBACK = "Chưa thể tạo nhận xét AI lúc này. Bạn vẫn có thể xem các chỉ số phân tích để tiếp tục luyện tập."
 
 
+class FeedbackGenerationError(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def _format_time(seconds: float) -> str:
     total = int(seconds)
     return f"{total // 60:02d}:{total % 60:02d}"
@@ -40,7 +46,7 @@ def _generate_feedback_sync(result: dict[str, Any]) -> str:
     client = genai.Client(api_key=settings.gemini_api_key)
     try:
         response = client.models.generate_content(model=settings.gemini_model, contents=_build_prompt(result))
-        return (response.text or "").strip() or FALLBACK_FEEDBACK
+        return (response.text or "").strip()
     finally:
         client.close()
 
@@ -50,9 +56,14 @@ async def generate_feedback(result: dict[str, Any]) -> str:
     if not settings.gemini_api_key:
         return FALLBACK_FEEDBACK
     try:
-        return await asyncio.wait_for(
+        text = await asyncio.wait_for(
             asyncio.to_thread(_generate_feedback_sync, result),
             timeout=settings.gemini_timeout_seconds,
         )
-    except Exception:
-        return FALLBACK_FEEDBACK
+    except TimeoutError as error:
+        raise FeedbackGenerationError("AI_FEEDBACK_TIMEOUT", "Dịch vụ AI phản hồi quá thời gian chờ. Vui lòng thử lại.") from error
+    except Exception as error:
+        raise FeedbackGenerationError("AI_FEEDBACK_FAILED", "Chưa thể tạo nhận xét AI. Vui lòng thử lại.") from error
+    if not text.strip():
+        raise FeedbackGenerationError("AI_FEEDBACK_FAILED", "Dịch vụ AI chưa trả về nhận xét. Vui lòng thử lại.")
+    return text

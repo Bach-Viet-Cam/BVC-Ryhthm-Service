@@ -7,6 +7,7 @@ from aio_pika import IncomingMessage, Message, RobustChannel, RobustConnection
 from pydantic import ValidationError
 
 from app.audio.downloader import AudioDownloadError
+from app.feedback.gemini_feedback import FeedbackGenerationError
 from app.config import get_settings
 from app.database import SessionFactory
 from app.repositories.evaluation_repository import EvaluationRepository
@@ -88,6 +89,8 @@ class RabbitMqWorker:
             await self.evaluation_service.process_task(task)
         except AudioQualityError as error:
             await self._handle_error(message, task, error.code, str(error), False, callback_failure=False)
+        except FeedbackGenerationError as error:
+            await self._handle_error(message, task, error.code, str(error), False)
         except AudioProcessingError as error:
             await self._handle_error(message, task, error.code, str(error), True)
         except AudioDownloadError as error:

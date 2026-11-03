@@ -395,3 +395,54 @@ async def test_http_create_process_and_get_result_with_actual_service(setup, mon
             "evaluationId": "evaluation-1", "status": "completed",
             "result": {"overallScore": 92, "aiFeedback": "finished", "studentAudioQuality": PASS_QUALITY}, "error": None,
         }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["AI_FEEDBACK_TIMEOUT", "AI_FEEDBACK_FAILED"])
+async def test_ai_failure_keeps_audio_and_retry_with_new_id_completes(setup, code):
+    from app.feedback.gemini_feedback import FeedbackGenerationError
+
+    worker, sessions = setup
+    downloaded = []
+    events = []
+
+    async def download(url, directory):
+        downloaded.append(url)
+        return directory / "audio"
+
+    async def fail_feedback(result):
+        raise FeedbackGenerationError(code, "Dịch vụ AI chưa sẵn sàng. Vui lòng thử lại.")
+
+    async def send(payload, job, state, **extra):
+        events.append((payload.evaluationId, payload.attempt, job, state, extra))
+
+    worker.evaluation_service.audio_service = SimpleNamespace(download=download)
+    worker.evaluation_service.rhythm_analysis_service = analysis_stub({"overallScore": 88})
+    worker.evaluation_service.feedback_service = SimpleNamespace(generate=fail_feedback)
+    worker.evaluation_service.callback_client = SimpleNamespace(send=send)
+    first = task()
+    message = FakeMessage(first)
+    await worker.handle_message(message)
+    saved = record(sessions)
+    assert message.acked == 1
+    assert (saved.status, saved.error_code) == ("failed", code)
+    assert saved.student_url == str(first.studentUrl)
+    assert saved.result_json is None
+    assert events[-1][:4] == (first.evaluationId, 1, "feedback", "failed")
+    assert events[-1][4]["code"] == code
+
+    async def recovered(result):
+        return "Tiếp tục luyện tập."
+
+    worker.evaluation_service.feedback_service = SimpleNamespace(generate=recovered)
+    retried = first.model_copy(update={"evaluationId": "evaluation-retry", "messageId": "message-retry", "attempt": 2})
+    retry_message = FakeMessage(retried)
+    await worker.handle_message(retry_message)
+    assert retry_message.acked == 1
+    with sessions() as session:
+        successful = worker.repository.get(session, retried.evaluationId)
+        assert successful.status == "completed"
+        assert successful.student_url == saved.student_url
+        assert successful.result_json["aiFeedback"] == "Tiếp tục luyện tập."
+    assert downloaded == [str(first.studentUrl), str(first.templateUrl)] * 2
+    assert events[-1][:4] == (retried.evaluationId, 2, "feedback", "done")
