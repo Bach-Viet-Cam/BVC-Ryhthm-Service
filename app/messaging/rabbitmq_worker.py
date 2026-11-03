@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
 
@@ -18,7 +17,6 @@ from app.services.audio_quality_service import AudioProcessingError, AudioQualit
 from app.services.evaluation_service import EvaluationService, PermanentEvaluationError
 from app.services.template_analysis_service import TemplateAnalysisError, TemplateAnalysisService
 
-logger = logging.getLogger(__name__)
 
 
 class RabbitMqWorker:
@@ -39,7 +37,6 @@ class RabbitMqWorker:
             template_queue = await self._declare_template_queue(channel)
             await evaluation_queue.consume(partial(self._tracked, self.handle_message), no_ack=False)
             await template_queue.consume(partial(self._tracked, self.handle_template_message), no_ack=False)
-            logger.info("Worker đang nhận job so sánh và phân tích template, xử lý tuần tự.")
             await asyncio.Future()
         finally:
             # Wait for shielded CPU/file work before closing storage and broker resources.
@@ -73,13 +70,12 @@ class RabbitMqWorker:
         )
 
     async def _log_dead_letter(self, message: IncomingMessage) -> None:
-        logger.error("Job so sánh đã chuyển vào dead-letter queue: %s", message.body.decode("utf-8", errors="replace"))
+        return None
 
     async def handle_message(self, message: IncomingMessage) -> None:
         try:
             task = EvaluationTask.model_validate_json(message.body)
         except ValidationError:
-            logger.error("Payload job so sánh không hợp lệ.")
             await message.reject(requeue=False)
             return
         try:
@@ -100,7 +96,6 @@ class RabbitMqWorker:
             code = error.code if isinstance(error, PermanentEvaluationError) else "EVALUATION_FAILED"
             await self._handle_error(message, task, code, str(error), False)
         except Exception:
-            logger.exception("Lỗi khi xử lý job so sánh %s", task.evaluationId)
             await self._handle_error(message, task, "INTERNAL_ERROR", "Lỗi nội bộ khi phân tích audio.", True)
         else:
             await message.ack()
@@ -119,7 +114,6 @@ class RabbitMqWorker:
         try:
             task = TemplateAnalysisTask.model_validate_json(message.body)
         except ValidationError:
-            logger.error("Payload job template không hợp lệ.")
             await message.reject(requeue=False)
             return
         try:
@@ -131,7 +125,6 @@ class RabbitMqWorker:
         try:
             await self.template_service.process_task(task)
         except TemplateTaskConflictError:
-            logger.error("Job template trùng mã nhưng khác đầu vào: %s", task.analysisId)
             await message.reject(requeue=False)
         except AudioQualityError as error:
             await self._handle_template_error(message, task, error.code, str(error), False, error.report)
@@ -144,7 +137,6 @@ class RabbitMqWorker:
         except ValueError:
             await self._handle_template_error(message, task, "TEMPLATE_ANALYSIS_FAILED", "Không thể phân tích nội dung audio template.", False)
         except Exception:
-            logger.exception("Lỗi khi xử lý template %s", task.analysisId)
             await self._handle_template_error(message, task, "INTERNAL_ERROR", "Lỗi nội bộ khi phân tích template.", True)
         else:
             await message.ack()
@@ -180,6 +172,5 @@ class RabbitMqWorker:
             await channel.close()
 
     async def _requeue_after_failure(self, message: IncomingMessage) -> None:
-        logger.exception("Chưa thể xác nhận hoặc lưu trạng thái job; giao lại message.")
         if not getattr(message, "processed", False):
             await message.reject(requeue=True)

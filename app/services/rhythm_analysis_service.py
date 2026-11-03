@@ -18,8 +18,8 @@ class RhythmAnalysisService:
     async def analyze_template(self, template: dict[str, Any], instrument_id: str) -> dict[str, Any]:
         return await asyncio.to_thread(template_analysis_to_recording, template, instrument_id)
 
-    async def compare(self, teacher: dict[str, Any], student: dict[str, Any]) -> dict[str, Any]:
-        return await asyncio.to_thread(compare_recordings, teacher, student)
+    async def compare(self, teacher: dict[str, Any], student: dict[str, Any], origin_frame: int = 0) -> dict[str, Any]:
+        return await asyncio.to_thread(compare_recordings, teacher, student, origin_frame)
 
     async def evaluate(self, teacher_path: Path, student_path: Path, instrument_id: str) -> dict[str, Any]:
         return await asyncio.to_thread(evaluate_pair, teacher_path, student_path, instrument_id)

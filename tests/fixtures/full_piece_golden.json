@@ -1,0 +1,25 @@
+{
+ "pitchAccuracyPercent": 86.96,
+ "rhythmAccuracyPercent": 80.0,
+ "overallScore": 84.17,
+ "meanDeviationCents": 70.5,
+ "totalVoicedFrames": 230,
+ "passedFrames": 200,
+ "rhythmSegments": [
+  {
+   "startTime": 0.0,
+   "endTime": 2.0,
+   "status": "fast"
+  },
+  {
+   "startTime": 2.0,
+   "endTime": 3.99,
+   "status": "fast"
+  }
+ ],
+ "pitchErrorSegments": [],
+ "instrumentId": "dan_bau",
+ "instrument": "Đàn Bầu",
+ "teacherTempoBpm": 100.0,
+ "studentTempoBpm": 100.0
+}

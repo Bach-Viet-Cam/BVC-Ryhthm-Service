@@ -1,10 +1,8 @@
 """One in-process gate for queue jobs and HTTP background evaluations."""
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 
-logger = logging.getLogger(__name__)
 
 
 class JobExecutionService:
@@ -20,5 +18,5 @@ class JobExecutionService:
                 try:
                     await running
                 except Exception:
-                    logger.exception("Job gặp lỗi khi hoàn tất trước khi dừng worker.")
+                    pass
                 raise

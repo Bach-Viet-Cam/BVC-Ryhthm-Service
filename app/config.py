@@ -1,4 +1,5 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,7 +58,15 @@ class Settings(BaseSettings):
 
     @property
     def callback_allowed_host_values(self) -> set[str]:
-        return {host.strip().lower() for host in self.callback_allowed_hosts.split(",") if host.strip()}
+        # Callback URLs are checked by hostname, while env values commonly use
+        # host:port (for example localhost:3000 during local development).
+        values = set()
+        for entry in self.callback_allowed_hosts.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            values.add((urlparse(f"//{entry}").hostname or entry).lower())
+        return values
 
 
 @lru_cache

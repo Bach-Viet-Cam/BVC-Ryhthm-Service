@@ -1,7 +1,6 @@
 """Coordinate one evaluation while preserving the existing task lifecycle."""
 
 import asyncio
-import logging
 import json
 import shutil
 from collections.abc import Callable
@@ -11,7 +10,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.audio.downloader import AudioDownloadError
-from app.evaluation.evaluator import HOP_LENGTH, SAMPLE_RATE
+from app.evaluation.evaluator import HOP_LENGTH, SAMPLE_RATE, score_baseline, slice_recording
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.repositories.template_analysis_repository import TemplateAnalysisRepository
 from app.schemas.messages import EvaluationTask
@@ -24,7 +23,6 @@ from app.services.rhythm_analysis_service import RhythmAnalysisService
 from app.config import get_settings
 from app.services.practice_progress_callback_client import PracticeProgressCallbackClient, ProgressJob
 
-logger = logging.getLogger(__name__)
 
 
 class PermanentEvaluationError(Exception):
@@ -108,8 +106,16 @@ class EvaluationService:
             else:
                 teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
                 teacher_analysis = await self.rhythm_analysis_service.analyze(teacher_path, task.instrumentId)
-            result = await self.rhythm_analysis_service.compare(teacher_analysis, student_analysis)
+            if task.is_segment:
+                teacher_analysis, origin_frame = slice_recording(
+                    teacher_analysis, task.templateStartSec, task.templateEndSec)
+                result = await self.rhythm_analysis_service.compare(teacher_analysis, student_analysis, origin_frame)
+            else:
+                result = await self.rhythm_analysis_service.compare(teacher_analysis, student_analysis)
             analysis = result.pop("_analysis", None)
+            if task.is_segment:
+                analysis = None  # the stored pitch data would cover only the slice, not the whole piece
+                self._attach_segment(task, result, teacher_analysis["toleranceCents"])
             await self._notify(task, stage, "done")
 
             stage = "feedback"
@@ -144,7 +150,7 @@ class EvaluationService:
         try:
             await self.callback_client.send(task, job, status, code=code, reason=reason, result=result)
         except Exception:
-            logger.exception("Unexpected error while delivering practice callback for %s", task.evaluationId)
+            pass
 
     async def _write_analysis(self, task: EvaluationTask, analysis: dict | None, result: dict,
                               used_template: bool) -> dict | None:
@@ -162,7 +168,32 @@ class EvaluationService:
         try:
             return await asyncio.to_thread(self.template_storage.write_evaluation, task.evaluationId, task.attempt, document)
         except (ArtifactUnavailableError, OSError, ValueError, TypeError):
-            logger.exception("Could not store the analysis artifact for %s", task.evaluationId)
+            return None
+
+    def _attach_segment(self, task: EvaluationTask, result: dict, tolerance_cents: float) -> None:
+        result["segment"] = {"startSec": task.templateStartSec, "endSec": task.templateEndSec}
+        baseline = self._read_baseline(task, tolerance_cents) if task.baselineEvaluationId else None
+        if baseline is not None:
+            voiced = baseline.pop("totalVoicedFrames", 0)
+            if voiced == 0:
+                baseline = {key: None for key in baseline}
+        result["baseline"] = baseline
+        if result.get("totalVoicedFrames") == 0:
+            for key in ("overallScore", "pitchAccuracyPercent", "rhythmAccuracyPercent"):
+                result[key] = None
+
+    def _read_baseline(self, task: EvaluationTask, tolerance_cents: float) -> dict | None:
+        """Score the original attempt over the same range; a missing or unreadable artifact only means no baseline."""
+        try:
+            with self.session_factory() as session:
+                record = self.repository.get(session, task.baselineEvaluationId)
+                if record is None or record.status != "completed":
+                    return None
+                if not record.analysis_artifact_key or not record.analysis_artifact_sha256:
+                    return None
+                raw = self.template_storage.read(record.analysis_artifact_key, record.analysis_artifact_sha256)
+            return score_baseline(json.loads(raw), task.templateStartSec, task.templateEndSec, tolerance_cents)
+        except (ArtifactUnavailableError, OSError, UnicodeError, ValueError, TypeError, KeyError):
             return None
 
     def _read_template_cache(self, task: EvaluationTask) -> dict | None:
@@ -200,7 +231,6 @@ class EvaluationService:
             await self.report_final_failure(task, code, str(error))
             self.record_failure(task, code, str(error))
         except Exception:
-            logger.exception("Unexpected direct evaluation error for %s", task.evaluationId)
             await self.report_final_failure(task, "INTERNAL_ERROR", "Internal evaluation error")
             self.record_failure(task, "INTERNAL_ERROR", "Lỗi nội bộ khi phân tích audio")
 

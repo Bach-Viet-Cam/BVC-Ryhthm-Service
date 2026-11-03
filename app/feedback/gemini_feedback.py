@@ -1,14 +1,17 @@
 import asyncio
 import json
-import logging
 from typing import Any
 
 from google import genai
 
 from app.config import get_settings
 
-logger = logging.getLogger(__name__)
 FALLBACK_FEEDBACK = "Chưa thể tạo nhận xét AI lúc này. Bạn vẫn có thể xem các chỉ số phân tích để tiếp tục luyện tập."
+
+
+def _format_time(seconds: float) -> str:
+    total = int(seconds)
+    return f"{total // 60:02d}:{total % 60:02d}"
 
 
 def _build_prompt(result: dict[str, Any]) -> str:
@@ -16,8 +19,13 @@ def _build_prompt(result: dict[str, Any]) -> str:
         "instrument", "pitchAccuracyPercent", "rhythmAccuracyPercent", "overallScore",
         "meanDeviationCents", "teacherTempoBpm", "studentTempoBpm", "rhythmSegments", "pitchErrorSegments",
     )}
+    segment = result.get("segment")
+    segment_note = ""
+    if segment:
+        span = f"{_format_time(segment['startSec'])}–{_format_time(segment['endSec'])}"
+        segment_note = "\n" + f"Đây là đoạn {span} của bài, chỉ nhận xét đoạn này." + "\n"
     return f"""Bạn là giáo viên dạy nhạc cụ truyền thống Việt Nam, chuyên nghiệp nhưng thân thiện.
-Hãy nhận xét ngắn gọn bằng tiếng Việt cho học viên dựa trên kết quả phân tích dưới đây.
+Hãy nhận xét ngắn gọn bằng tiếng Việt cho học viên dựa trên kết quả phân tích dưới đây.{segment_note}
 
 Kết quả phân tích:
 {json.dumps(compact_result, ensure_ascii=False, indent=2)}
@@ -40,7 +48,6 @@ def _generate_feedback_sync(result: dict[str, Any]) -> str:
 async def generate_feedback(result: dict[str, Any]) -> str:
     settings = get_settings()
     if not settings.gemini_api_key:
-        logger.warning("GEMINI_API_KEY chưa được cấu hình")
         return FALLBACK_FEEDBACK
     try:
         return await asyncio.wait_for(
@@ -48,5 +55,4 @@ async def generate_feedback(result: dict[str, Any]) -> str:
             timeout=settings.gemini_timeout_seconds,
         )
     except Exception:
-        logger.exception("Gemini feedback generation failed")
         return FALLBACK_FEEDBACK

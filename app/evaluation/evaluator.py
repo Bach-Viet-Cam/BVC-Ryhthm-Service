@@ -41,13 +41,30 @@ def _f0_to_json(f0: np.ndarray) -> list[float | None]:
     return [round(float(value), 2) if np.isfinite(value) else None for value in f0]
 
 
-def _score_pitch_and_rhythm(student_f0: np.ndarray, teacher_f0: np.ndarray, tolerance_cents: float) -> dict:
+def seconds_to_frame(seconds: float, length: int) -> int:
+    return min(max(round(seconds * SAMPLE_RATE / HOP_LENGTH), 0), length)
+
+
+def _frame_to_seconds(frame: int) -> float:
+    return frame * HOP_LENGTH / SAMPLE_RATE
+
+
+def _align(student_f0: np.ndarray, teacher_f0: np.ndarray) -> np.ndarray:
     _, warping_path = librosa.sequence.dtw(
         X=_to_cents_sequence(student_f0).reshape(1, -1),
         Y=_to_cents_sequence(teacher_f0).reshape(1, -1),
         metric="euclidean",
     )
-    path = warping_path[::-1]
+    return warping_path[::-1]
+
+
+def _score_pitch_and_rhythm(student_f0: np.ndarray, teacher_f0: np.ndarray, tolerance_cents: float) -> dict:
+    return _score_frames(teacher_f0, student_f0, _align(student_f0, teacher_f0), tolerance_cents)
+
+
+def _score_frames(
+    teacher_f0: np.ndarray, student_f0: np.ndarray, path, tolerance_cents: float, origin_frame: int = 0
+) -> dict:
     passed_frames = 0
     total_voiced_frames = 0
     deviations: list[float] = []
@@ -77,7 +94,7 @@ def _score_pitch_and_rhythm(student_f0: np.ndarray, teacher_f0: np.ndarray, tole
         raw_difference = float(1200.0 * np.log2(student_pitch / teacher_pitch))
         absolute_difference = abs(raw_difference)
         deviations.append(absolute_difference)
-        timestamp = teacher_index * HOP_LENGTH / SAMPLE_RATE
+        timestamp = _frame_to_seconds(teacher_index + origin_frame)
 
         if absolute_difference <= tolerance_cents:
             passed_frames += 1
@@ -107,8 +124,8 @@ def _score_pitch_and_rhythm(student_f0: np.ndarray, teacher_f0: np.ndarray, tole
             not np.isnan(teacher_f0[teacher_index]) and np.isnan(student_f0[student_index])
             for student_index, teacher_index in chunk_path
         )
-        start_time = round(chunk_start * HOP_LENGTH / SAMPLE_RATE, 2)
-        end_time = round(min(chunk_end, max_teacher_index) * HOP_LENGTH / SAMPLE_RATE, 2)
+        start_time = round(_frame_to_seconds(chunk_start + origin_frame), 2)
+        end_time = round(_frame_to_seconds(min(chunk_end, max_teacher_index) + origin_frame), 2)
         if missing_count > voiced_count * 0.5:
             rhythm_segments.append({"startTime": start_time, "endTime": end_time, "status": "missing"})
             continue
@@ -166,11 +183,47 @@ def analyze_recording(audio_path: Path, instrument_id: str) -> dict:
     }
 
 
-def compare_recordings(teacher: dict, student: dict) -> dict:
+def slice_recording(recording: dict, start_sec: float, end_sec: float) -> tuple[dict, int]:
+    """Copy of a recording whose f0 is cut to [start_sec, end_sec]; also returns the first kept frame."""
+    length = len(recording["f0"])
+    start_frame = seconds_to_frame(start_sec, length)
+    end_frame = seconds_to_frame(end_sec, length)
+    return {**recording, "f0": recording["f0"][start_frame:end_frame]}, start_frame
+
+
+def score_baseline(artifact: dict, start_sec: float, end_sec: float, tolerance_cents: float) -> dict | None:
+    """Re-score the original attempt's stored analysis over the same template range."""
+    try:
+        teacher_values = artifact["pitch"]["teacherF0Hz"]
+        student_values = artifact["pitch"]["studentF0Hz"]
+        mapping = artifact["alignment"]["studentFrameByTeacherFrame"]
+    except (KeyError, TypeError):
+        return None
+    if not teacher_values or not student_values or not mapping:
+        return None
+    to_array = lambda values: np.asarray([np.nan if value is None else float(value) for value in values], dtype=float)
+    teacher_f0 = to_array(teacher_values)
+    student_f0 = to_array(student_values)
+    start_frame = seconds_to_frame(start_sec, len(teacher_f0))
+    end_frame = seconds_to_frame(end_sec, len(teacher_f0))
+    teacher_slice = teacher_f0[start_frame:end_frame]
+    if len(teacher_slice) == 0:
+        return None
+    path = [
+        (min(int(student_frame), len(student_f0) - 1), local_index)
+        for local_index, student_frame in enumerate(mapping[start_frame:end_frame])
+    ]
+    scored = _score_frames(teacher_slice, student_f0, path, tolerance_cents)
+    return {key: scored[key] for key in ("overallScore", "pitchAccuracyPercent", "rhythmAccuracyPercent", "totalVoicedFrames")}
+
+
+def compare_recordings(teacher: dict, student: dict, origin_frame: int = 0) -> dict:
     """Score recordings whose audio features have already been extracted."""
     if teacher["instrumentId"] != student["instrumentId"]:
         raise ValueError("Hai bản thu phải dùng cùng nhạc cụ.")
-    result = _score_pitch_and_rhythm(student["f0"], teacher["f0"], student["toleranceCents"])
+    result = _score_frames(
+        teacher["f0"], student["f0"], _align(student["f0"], teacher["f0"]), student["toleranceCents"], origin_frame
+    )
     result["instrumentId"] = student["instrumentId"]
     result["instrument"] = student["instrument"]
     result["teacherTempoBpm"] = round(float(teacher["tempoBpm"]), 1)
