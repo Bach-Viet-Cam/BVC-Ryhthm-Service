@@ -114,7 +114,10 @@ class EvaluationService:
                 result = await self.rhythm_analysis_service.compare(teacher_analysis, student_analysis)
             analysis = result.pop("_analysis", None)
             if task.is_segment:
-                analysis = None  # the stored pitch data would cover only the slice, not the whole piece
+                # The pitch data covers only the slice, so it travels in the result instead of the whole-piece artifact
+                if analysis is not None:
+                    result["pitch"] = {"sampleRate": SAMPLE_RATE, "hopLength": HOP_LENGTH, **analysis}
+                analysis = None
                 self._attach_segment(task, result, teacher_analysis["toleranceCents"])
             await self._notify(task, stage, "done")
 

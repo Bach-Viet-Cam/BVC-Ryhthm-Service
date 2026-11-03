@@ -149,6 +149,8 @@ async def test_segment_task_slices_template_and_scores_baseline(tmp_path):
     assert result["segment"] == {"startSec": 2.0, "endSec": 4.0}
     assert set(result["baseline"]) == {"overallScore", "pitchAccuracyPercent", "rhythmAccuracyPercent"}
     assert result["baseline"]["pitchAccuracyPercent"] == 100.0
+    assert result["pitch"] == {"sampleRate": 22050, "hopLength": 512, "teacherF0Hz": [220.0], "studentF0Hz": [220.0],
+                               "studentFrameByTeacherFrame": [0]}
     assert spy.origin_frame == seconds_to_frame(2.0, TEACHER_LENGTH)
     assert spy.teacher_length == seconds_to_frame(4.0, TEACHER_LENGTH) - spy.origin_frame
 
@@ -191,7 +193,7 @@ async def test_full_piece_task_has_no_segment_keys(tmp_path):
     await service.process_task(base_task())
 
     result = final_result(callbacks)
-    assert "segment" not in result and "baseline" not in result
+    assert "segment" not in result and "baseline" not in result and "pitch" not in result
     assert spy.origin_frame == 0 and spy.teacher_length == TEACHER_LENGTH
 
 
