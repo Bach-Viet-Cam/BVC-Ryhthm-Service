@@ -23,8 +23,13 @@ def _format_time(seconds: float) -> str:
 def _build_prompt(result: dict[str, Any]) -> str:
     compact_result = {key: result.get(key) for key in (
         "instrument", "pitchAccuracyPercent", "rhythmAccuracyPercent", "overallScore",
-        "meanDeviationCents", "teacherTempoBpm", "studentTempoBpm", "rhythmSegments", "pitchErrorSegments",
+        "meanDeviationCents", "teacherTempoBpm", "studentTempoBpm", "rhythmSegments",
     )}
+    diagnoses = result.get("techniqueDiagnoses") or []
+    if diagnoses:
+        compact_result["techniqueDiagnoses"] = [{**item, "time": _format_time(item["startTime"])} for item in diagnoses]
+    else:
+        compact_result["pitchErrorSegments"] = result.get("pitchErrorSegments")
     segment = result.get("segment")
     segment_note = ""
     if segment:
@@ -36,9 +41,21 @@ Hãy nhận xét ngắn gọn bằng tiếng Việt cho học viên dựa trên 
 Kết quả phân tích:
 {json.dumps(compact_result, ensure_ascii=False, indent=2)}
 
-Yêu cầu: viết tối đa 4 câu, khích lệ học viên, nêu vấn đề cụ thể về cao độ hoặc nhịp nếu có,
+Yêu cầu: viết tối đa 5 câu, khích lệ học viên, nêu vấn đề cụ thể về cao độ hoặc nhịp nếu có,
 giải thích các đoạn nhanh/chậm/mất nhịp theo mốc thời gian và đưa ra một gợi ý luyện tập thực tế.
-Không giải thích dài về thuật toán, cents hoặc BPM.""".strip()
+Không giải thích dài về thuật toán, cents hoặc BPM.{_diagnosis_rules(bool(diagnoses))}""".strip()
+
+
+def _diagnosis_rules(has_diagnoses: bool) -> str:
+    if not has_diagnoses:
+        return ""
+    return """
+
+Cách dùng "techniqueDiagnoses" (đã được hệ thống chẩn đoán theo từng nốt, mỗi mục có mốc thời gian, nốt bản mẫu và lời khuyên):
+- Ưu tiên theo thứ tự: WRONG_NOTE (đánh sai nốt) > STRING_TUNING (dây lên sai) > TECHNIQUE (kỹ thuật tạo cao độ).
+- Nếu có STRING_TUNING, nhắc học viên chỉnh lại dây đó trước khi luyện tiếp, vì mọi lần gảy dây đó sẽ lệch.
+- Nêu tên nốt và mốc thời gian (mm:ss), dùng đúng nội dung "advice"; không tự đưa ra kỹ thuật khác ngoài "advice".
+- Chỉ nhắc tối đa 3 lỗi cao độ quan trọng nhất."""
 
 
 def _generate_feedback_sync(result: dict[str, Any]) -> str:

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.audio.downloader import AudioDownloadError
 from app.feedback.gemini_feedback import FeedbackGenerationError
+from app.feedback.technique import diagnose
 from app.evaluation.evaluator import HOP_LENGTH, SAMPLE_RATE, score_baseline, slice_recording
 from app.repositories.evaluation_repository import EvaluationRepository
 from app.repositories.template_analysis_repository import TemplateAnalysisRepository
@@ -107,6 +108,7 @@ class EvaluationService:
             else:
                 teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
                 teacher_analysis = await self.rhythm_analysis_service.analyze(teacher_path, task.instrumentId, task.instrument)
+            origin_frame = 0
             if task.is_segment:
                 teacher_analysis, origin_frame = slice_recording(
                     teacher_analysis, task.templateStartSec, task.templateEndSec)
@@ -114,6 +116,9 @@ class EvaluationService:
             else:
                 result = await self.rhythm_analysis_service.compare(teacher_analysis, student_analysis)
             analysis = result.pop("_analysis", None)
+            diagnoses = self._diagnose(task, analysis, origin_frame)
+            if diagnoses:
+                result["techniqueDiagnoses"] = diagnoses
             if task.is_segment:
                 # The pitch data covers only the slice, so it travels in the result instead of the whole-piece artifact
                 if analysis is not None:
@@ -144,6 +149,14 @@ class EvaluationService:
             raise
         finally:
             shutil.rmtree(work_directory, ignore_errors=True)
+
+    @staticmethod
+    def _diagnose(task: EvaluationTask, analysis: dict | None, origin_frame: int) -> list[dict]:
+        """Chẩn đoán theo nốt chỉ làm nhận xét chi tiết hơn; lỗi ở đây không được chặn việc chấm bài."""
+        try:
+            return diagnose(analysis, task.instrumentId, task.instrument, origin_frame)
+        except (KeyError, TypeError, ValueError, IndexError):
+            return []
 
     async def report_final_failure(self, task: EvaluationTask, code: str, reason: str) -> None:
         await self._notify(task, self._active_stage or "quality_check", "failed", code=code, reason=reason)
