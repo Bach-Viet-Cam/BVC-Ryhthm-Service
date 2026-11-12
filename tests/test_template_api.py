@@ -113,3 +113,13 @@ async def test_missing_corrupt_or_escaping_artifact_returns_503(tmp_path, monkey
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Authorization": "Bearer secret"}) as client:
         response = await client.get(f"/api/v1/template-analyses/{payload.analysisId}/artifact")
         assert response.status_code == 503 and response.json()["detail"]["code"] == "ARTIFACT_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_lookup_does_not_normalize_instrument_code(tmp_path, monkeypatch):
+    service, _, app = setup(tmp_path, monkeypatch)
+    payload = task(instrumentCode="DBA103")
+    await service.process_task(payload)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Authorization": "Bearer secret"}) as client:
+        assert (await client.get("/api/v1/template-analyses/lookup", params=query(payload))).status_code == 200
+        assert (await client.get("/api/v1/template-analyses/lookup", params=query(payload, instrumentCode="unknown_code"))).status_code == 404

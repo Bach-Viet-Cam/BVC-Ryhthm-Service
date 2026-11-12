@@ -101,7 +101,7 @@ def segment_service(tmp_path, voiced_frames=10):
     spy = SimpleNamespace(origin_frame=None, teacher_length=None)
     callbacks = []
 
-    async def analyze(path, instrument):
+    async def analyze(path, instrument, config=None):
         return recording([220.0] * TEACHER_LENGTH)
 
     async def compare(teacher, student, origin_frame=0):

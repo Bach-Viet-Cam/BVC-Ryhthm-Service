@@ -29,7 +29,8 @@ def imports():
 def task(**changes):
     values = dict(messageId=str(uuid4()), analysisId=str(uuid4()), sheetMusicId=str(uuid4()),
                   mediaFileId=str(uuid4()), mediaUrl="https://example.com/template.wav",
-                  instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z")
+                  instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z",
+                  instrument=dict(name="Đàn bầu", fminHz=65, fmaxHz=1200, toleranceCents=70))
     values.update(changes)
     return imports().Task(**values)
 

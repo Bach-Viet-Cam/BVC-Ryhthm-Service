@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -74,17 +75,18 @@ async def test_bad_template_payload_goes_to_dlq(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unsupported_instrument_falls_back_to_dan_bau_settings(tmp_path, monkeypatch):
+async def test_instrument_block_is_stored_as_instrument_config(tmp_path, monkeypatch):
     instance, sessions = worker(tmp_path, monkeypatch)
-    payload = task(instrumentCode="unknown")
+    payload = task(instrumentCode="DBA103", instrument=dict(name="Đàn bầu", fminHz=65, fmaxHz=1047, toleranceCents=35))
     message = Message(payload)
     await instance.handle_template_message(message)
     with sessions() as session:
         saved = instance.template_service.repository.get(session, str(payload.analysisId))
         assert saved.status == "completed"
-        assert saved.instrument_code == "khong_ho_tro"
-        assert saved.instrument_config["fmin"] == 65.0
-        assert saved.instrument_config["fmax"] == 1200.0
+        assert saved.instrument_code == "DBA103"
+        assert saved.instrument_config == {"name": "Đàn bầu", "fmin": 65.0, "fmax": 1047.0, "toleranceCents": 35.0}
+        artifact = json.loads(instance.template_service.storage.read(saved.artifact_key, saved.artifact_sha256))
+        assert artifact["instrument"] == {"code": "DBA103", "name": "Đàn bầu", "fminHz": 65.0, "fmaxHz": 1047.0, "toleranceCents": 35.0}
     assert message.acked == 1
 
 

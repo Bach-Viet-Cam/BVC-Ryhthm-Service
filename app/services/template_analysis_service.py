@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import SessionFactory
-from app.evaluation.instruments import INSTRUMENTS
 from app.repositories.template_analysis_repository import TemplateAnalysisRepository
 from app.schemas.template_messages import TemplateAnalysisTask
 from app.services.artifact_storage_service import ArtifactStorageService
@@ -45,7 +44,7 @@ class TemplateAnalysisService:
 
     def _find_or_create(self, session: Session, task: TemplateAnalysisTask):
         return self.repository.create_if_missing(
-            session, task, INSTRUMENTS.get(task.instrumentCode, {}), self.quality_service.policy(),
+            session, task, task.instrument.to_stored(), self.quality_service.policy(),
         )
 
     async def _process(self, task: TemplateAnalysisTask) -> None:
@@ -57,8 +56,6 @@ class TemplateAnalysisService:
             policy = dict(record.quality_policy)
             analysis_version = record.analysis_version
             self.repository.mark_processing(session, record)
-        if not instrument:
-            raise TemplateAnalysisError("UNSUPPORTED_INSTRUMENT", "Nhạc cụ chưa được dịch vụ phân tích hỗ trợ.")
 
         work_directory = Path(self.settings.temp_directory) / uuid4().hex
         try:

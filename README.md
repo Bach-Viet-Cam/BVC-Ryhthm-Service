@@ -64,6 +64,7 @@ Queue mặc định: `rhythm.evaluate.v1`.
   "templateUrl": "https://storage.example.com/template.wav",
   "studentUrl": "https://storage.example.com/student.wav",
   "instrumentId": "dan_bau",
+  "instrument": { "name": "Đàn bầu", "fminHz": 65, "fmaxHz": 1047, "toleranceCents": 35 },
   "requestedAt": "2026-09-25T10:00:00Z"
 }
 ```
@@ -87,7 +88,8 @@ Backend có thể gửi job trực tiếp qua HTTP:
   "evaluationId": "evaluation_123",
   "templateUrl": "https://storage.example.com/template.wav",
   "studentUrl": "https://storage.example.com/student.wav",
-  "instrumentId": "dan_bau"
+  "instrumentId": "dan_bau",
+  "instrument": { "name": "Đàn bầu", "fminHz": 65, "fmaxHz": 1047, "toleranceCents": 35 }
 }
 ```
 
@@ -115,13 +117,16 @@ Queue template durable: `rhythm.template.analyze.v1`. DLQ: `rhythm.template.anal
   "mediaFileId": "fbda6f08-83af-42ac-a2ec-587a99af0e40",
   "mediaUrl": "https://storage.example/template.wav",
   "instrumentCode": "dan_bau",
+  "instrument": { "name": "Đàn bầu", "fminHz": 65, "fmaxHz": 1047, "toleranceCents": 35 },
   "requestedAt": "2026-10-23T00:00:00Z"
 }
 ```
 
 Các ID phải là UUID, timestamp có múi giờ. Thay URL bằng file worker tải được. `sheetMusicId` là ID MAIN; `mediaFileId` là `MAIN.referenceAudioId`, không phải ID PDF/ảnh bản nhạc. Caller chịu trách nhiệm xác minh quan hệ MAIN/audio. Rhythm không truy vấn database backend.
 
-Nhạc cụ nhận các code: `dan_bau`, `dan_nhi`, `dan_nguyet`, `dan_tranh`, `dan_ty_ba`, `sao_truc`. Không truyền UUID Instrument hoặc code viết hoa của backend vào trường này.
+`instrumentId` / `instrumentCode` chỉ là định danh (dùng để khớp cache bản mẫu), service không tra cứu theo mã này. Thông số nhạc cụ nằm trong khối `instrument` do backend gửi kèm: `name`, `fminHz`, `fmaxHz` (dải tần trích cao độ, `fminHz` < `fmaxHz`) và `toleranceCents` (> 0, độ lệch cao độ cho phép khi chấm). Khối này bắt buộc ở cả hai queue và API; thiếu hoặc không hợp lệ thì job bị từ chối. Cache bản mẫu chỉ được dùng khi `fminHz`/`fmaxHz` của bản đã phân tích khớp với job; nếu lệch, mỗi lần chấm sẽ tải và phân tích lại bản mẫu cho tới khi bản mẫu được phân tích lại bằng cấu hình mới.
+
+Triển khai: deploy BE trước, đợi hai queue `rhythm.evaluate.v1` và `rhythm.template.analyze.v1` trống rồi mới deploy Rhythm. Job cũ không có khối `instrument` bị từ chối vào DLQ mà không có callback. Điểm chấm thay đổi so với trước vì dải tần và dung sai nay lấy từ bảng Instrument của BE.
 
 Worker kiểm tra quality, trích F0/tempo bằng phương pháp hiện có rồi ghi JSON. File chứa MAIN/audio ID, hash nguồn, cấu hình nhạc cụ, quality, `f0Hz` (`null` khi không có cao độ), `voicedFlags`, sample rate/hop length, tempo và phiên bản. Template không gọi Gemini. Database giữ metadata cùng key:
 

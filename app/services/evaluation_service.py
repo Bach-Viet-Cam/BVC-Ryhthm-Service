@@ -89,7 +89,7 @@ class EvaluationService:
             stage = "audio_analysis"
             self._active_stage = stage
             await self._notify(task, stage, "started")
-            student_analysis = await self.rhythm_analysis_service.analyze(student_path, task.instrumentId)
+            student_analysis = await self.rhythm_analysis_service.analyze(student_path, task.instrumentId, task.instrument)
             await self._notify(task, stage, "done")
 
             stage = "comparison"
@@ -98,15 +98,15 @@ class EvaluationService:
             used_template = False
             if template is not None:
                 try:
-                    teacher_analysis = await self.rhythm_analysis_service.analyze_template(template, task.instrumentId)
+                    teacher_analysis = await self.rhythm_analysis_service.analyze_template(template, task.instrumentId, task.instrument)
                     used_template = True
                 except (KeyError, TypeError, ValueError):
                     # A stale/corrupt artifact must never block a student's submission.
                     teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
-                    teacher_analysis = await self.rhythm_analysis_service.analyze(teacher_path, task.instrumentId)
+                    teacher_analysis = await self.rhythm_analysis_service.analyze(teacher_path, task.instrumentId, task.instrument)
             else:
                 teacher_path = await self.audio_service.download(str(task.templateUrl), work_directory)
-                teacher_analysis = await self.rhythm_analysis_service.analyze(teacher_path, task.instrumentId)
+                teacher_analysis = await self.rhythm_analysis_service.analyze(teacher_path, task.instrumentId, task.instrument)
             if task.is_segment:
                 teacher_analysis, origin_frame = slice_recording(
                     teacher_analysis, task.templateStartSec, task.templateEndSec)
@@ -213,6 +213,12 @@ class EvaluationService:
                 raw = self.template_storage.read(record.artifact_key, record.artifact_sha256)
             artifact = json.loads(raw)
             if artifact.get("analysisId") != str(task.templateAnalysisId):
+                return None
+            # The cached pitch track depends on the analysis range; a changed range means the cache is stale.
+            cached_instrument = artifact.get("instrument")
+            if not isinstance(cached_instrument, dict):
+                return None
+            if cached_instrument.get("fminHz") != task.instrument.fminHz or cached_instrument.get("fmaxHz") != task.instrument.fmaxHz:
                 return None
             return artifact
         except (ArtifactUnavailableError, OSError, UnicodeError, ValueError, TypeError):

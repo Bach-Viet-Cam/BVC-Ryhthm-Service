@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app.config import Settings
 from app.database import Base
 from app.repositories.evaluation_repository import EvaluationRepository
+from app.schemas.instrument import InstrumentConfig
 from app.schemas.messages import EvaluationTask
 from app.services.evaluation_service import EvaluationService
 from app.services.job_execution_service import JobExecutionService
@@ -30,7 +31,7 @@ def setup(tmp_path, amplitude):
         level = amplitude if "student" in url else 0.2
         sf.write(path, level * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
         return path
-    async def analyze(path, instrument):
+    async def analyze(path, instrument, config=None):
         calls.append("analyze")
         return {"path": path, "instrumentId": instrument}
     async def compare(teacher, student):
@@ -47,25 +48,47 @@ def setup(tmp_path, amplitude):
 
 def task(**changes):
     values = dict(messageId=str(uuid4()), evaluationId=str(uuid4()),
-                  templateUrl="https://example.com/teacher.wav", studentUrl="https://example.com/student.wav", instrumentId="dan_bau")
+                  templateUrl="https://example.com/teacher.wav", studentUrl="https://example.com/student.wav", instrumentId="dan_bau",
+                  instrument=dict(name="Đàn bầu", fminHz=65, fmaxHz=1200, toleranceCents=70))
     values.update(changes)
     return EvaluationTask(**values)
 
 
-def test_unsupported_instrument_is_normalized_to_fallback():
-    assert task(instrumentId="unknown").instrumentId == "khong_ho_tro"
+BAU_CONFIG = InstrumentConfig(name="Đàn bầu", fminHz=65, fmaxHz=1047, toleranceCents=35)
 
 
-def test_legacy_evaluator_falls_back_for_an_unknown_instrument(monkeypatch):
+def test_analyze_recording_uses_range_and_tolerance_from_config(monkeypatch):
+    from app.evaluation import evaluator
+
+    ranges = []
+    monkeypatch.setattr(evaluator, "_extract_f0", lambda _path, fmin, fmax: ranges.append((fmin, fmax)) or np.array([220.0]))
+    monkeypatch.setattr(evaluator, "_estimate_tempo", lambda _: 100.0)
+
+    result = evaluator.analyze_recording(Path("a.wav"), "DBA103", BAU_CONFIG)
+
+    assert ranges == [(65.0, 1047.0)]
+    assert (result["instrumentId"], result["instrument"], result["toleranceCents"]) == ("DBA103", "Đàn bầu", 35.0)
+
+
+def test_evaluate_pair_uses_config_name_and_code(monkeypatch):
     from app.evaluation import evaluator
 
     monkeypatch.setattr(evaluator, "_extract_f0", lambda *_: np.array([220.0, 220.0]))
     monkeypatch.setattr(evaluator, "_estimate_tempo", lambda _: 100.0)
 
-    result = evaluator.evaluate_pair(Path("teacher.wav"), Path("student.wav"), "unknown")
+    result = evaluator.evaluate_pair(Path("teacher.wav"), Path("student.wav"), "DBA103", BAU_CONFIG)
 
-    assert result["instrumentId"] == "khong_ho_tro"
-    assert result["instrument"] == "Không hỗ trợ"
+    assert result["instrumentId"] == "DBA103"
+    assert result["instrument"] == "Đàn bầu"
+
+
+def test_template_analysis_to_recording_rejects_other_instrument_code():
+    from app.evaluation import evaluator
+
+    template = {"instrument": {"code": "dan_nhi"}, "pitch": {"sampleRate": evaluator.SAMPLE_RATE, "hopLength": evaluator.HOP_LENGTH,
+                "f0Hz": [220.0]}, "rhythm": {"tempoBpm": 100.0}}
+    with pytest.raises(ValueError):
+        evaluator.template_analysis_to_recording(template, "dan_bau", BAU_CONFIG)
 
 
 @pytest.mark.asyncio
@@ -106,53 +129,67 @@ async def test_quality_rejection_reports_rejected_without_later_stages(tmp_path)
     assert len(events) == 2
 
 
-@pytest.mark.asyncio
-async def test_completed_template_artifact_skips_template_download_and_uses_cached_features(tmp_path):
+async def run_with_cached_template(tmp_path, cached_range):
+    """Evaluate a task (range 65-1200) against a stored template analysed with `cached_range`; returns (downloads, cache_hits)."""
     from app.repositories.template_analysis_repository import TemplateAnalysisRepository
     from app.schemas.template_messages import TemplateAnalysisTask
     from app.services.artifact_storage_service import ArtifactStorageService
 
     service, sessions, _ = setup(tmp_path, 0.2)
+    config = dict(name="Đàn bầu", fminHz=65, fmaxHz=1200, toleranceCents=70)
     analysis = TemplateAnalysisTask(messageId=uuid4(), analysisId=uuid4(), sheetMusicId=uuid4(), mediaFileId=uuid4(),
-                                    mediaUrl="https://example.com/teacher.wav", instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z")
+                                    mediaUrl="https://example.com/teacher.wav", instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z",
+                                    instrument=config)
     storage = ArtifactStorageService(tmp_path / "artifacts")
     artifact = storage.write(analysis, {
-        "analysisId": str(analysis.analysisId), "instrument": {"code": "dan_bau"},
+        "analysisId": str(analysis.analysisId),
+        "instrument": {"code": "dan_bau", "fminHz": cached_range[0], "fmaxHz": cached_range[1]},
         "pitch": {"sampleRate": 22050, "hopLength": 512, "f0Hz": [220.0, None]},
         "rhythm": {"tempoBpm": 100.0},
     })
     template_repository = TemplateAnalysisRepository()
     with sessions() as session:
-        record = template_repository.create_if_missing(session, analysis, {"name": "ÄÃ n Báº§u"}, {})
+        record = template_repository.create_if_missing(session, analysis, {"name": "Đàn bầu"}, {})
         template_repository.mark_completed(session, record, "source", artifact, {"verdict": "PASS"})
 
-    downloads = []
+    downloads, cache_hits = [], []
     async def download(url, directory):
         downloads.append(str(url))
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / "student.wav"
+        path = directory / ("student.wav" if "student" in str(url) else "teacher.wav")
         sf.write(path, 0.2 * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
         return path
-    async def analyze(student, instrument):
+    async def analyze(path, instrument, config=None):
         return {"recording": "student", "instrumentId": instrument}
-    async def cached(template, instrument):
-        assert template["analysisId"] == str(analysis.analysisId)
-        assert instrument == "dan_bau"
+    async def cached(template, instrument, config=None):
+        cache_hits.append(template["analysisId"])
         return {"recording": "template", "instrumentId": instrument}
     async def compare(template, student):
         return {"overallScore": 91, "pitchAccuracyPercent": 92, "rhythmAccuracyPercent": 90}
-    async def unexpected(*args):
-        pytest.fail("Cache hit must not evaluate or download the template")
 
     service.template_storage = storage
     service.audio_service = SimpleNamespace(download=download)
     service.rhythm_analysis_service = SimpleNamespace(analyze=analyze, analyze_template=cached, compare=compare)
-    payload = task(templateAnalysisId=analysis.analysisId)
+    payload = task(templateAnalysisId=analysis.analysisId, instrument=config)
     await service.process_direct_task(payload)
-
-    assert downloads == ["https://example.com/student.wav"]
     with sessions() as session:
         assert service.repository.get(session, payload.evaluationId).result_json["overallScore"] == 91
+    assert cache_hits in ([], [str(analysis.analysisId)])
+    return downloads, cache_hits
+
+
+@pytest.mark.asyncio
+async def test_completed_template_artifact_skips_template_download_and_uses_cached_features(tmp_path):
+    downloads, cache_hits = await run_with_cached_template(tmp_path, (65, 1200))
+    assert downloads == ["https://example.com/student.wav"]
+    assert len(cache_hits) == 1
+
+
+@pytest.mark.asyncio
+async def test_template_cache_is_ignored_when_pitch_range_differs(tmp_path):
+    downloads, cache_hits = await run_with_cached_template(tmp_path, (65, 1047))
+    assert cache_hits == []
+    assert downloads == ["https://example.com/student.wav", "https://example.com/teacher.wav"]
 
 
 @pytest.mark.asyncio
@@ -165,7 +202,7 @@ async def test_missing_template_artifact_falls_back_to_the_legacy_pair_evaluatio
         path = directory / ("student.wav" if "student" in str(url) else "teacher.wav")
         sf.write(path, 0.2 * np.sin(2 * np.pi * 220 * np.arange(8000) / 8000), 8000)
         return path
-    async def analyze(path, instrument):
+    async def analyze(path, instrument, config=None):
         return {"path": path, "instrumentId": instrument}
     async def compare(teacher, student):
         return {"overallScore": 80, "pitchAccuracyPercent": 80, "rhythmAccuracyPercent": 80}
@@ -216,7 +253,8 @@ async def test_template_queue_evaluation_queue_and_http_share_one_execution_gate
         return {"pitch": {"f0Hz": [220], "voicedFlags": [True]}, "rhythm": {"tempoBpm": 100}}
     template.feature_service = SimpleNamespace(extract=extract)
     main = TemplateAnalysisTask(messageId=uuid4(), analysisId=uuid4(), sheetMusicId=uuid4(), mediaFileId=uuid4(),
-                                mediaUrl="https://example.com/template.wav", instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z")
+                                mediaUrl="https://example.com/template.wav", instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z",
+                                    instrument=dict(name="Đàn bầu", fminHz=65, fmaxHz=1200, toleranceCents=70))
     await asyncio.gather(service.process_task(task()), service.process_direct_task(task()), template.process_task(main))
     assert maximum == 1
 
@@ -305,7 +343,8 @@ async def test_actual_http_request_and_both_queue_handlers_are_serialized(tmp_pa
     app.dependency_overrides[get_session] = dependency
     queue_task, http_task = task(), task()
     main = TemplateAnalysisTask(messageId=uuid4(), analysisId=uuid4(), sheetMusicId=uuid4(), mediaFileId=uuid4(),
-                                mediaUrl="https://example.com/template.wav", instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z")
+                                mediaUrl="https://example.com/template.wav", instrumentCode="dan_bau", requestedAt="2026-10-23T00:00:00Z",
+                                    instrument=dict(name="Đàn bầu", fminHz=65, fmaxHz=1200, toleranceCents=70))
     evaluation_message, template_message = Message(queue_task), Message(main)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Authorization": "Bearer secret"}) as client:
         _, _, response = await asyncio.gather(worker.handle_message(evaluation_message), worker.handle_template_message(template_message),

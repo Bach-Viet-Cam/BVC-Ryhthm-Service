@@ -1,8 +1,8 @@
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl
 
-from app.evaluation.instruments import normalize_instrument_id
+from app.schemas.instrument import InstrumentConfig
 
 ANALYSIS_VERSION = "template-pyin-v1"
 
@@ -16,9 +16,5 @@ class TemplateAnalysisTask(BaseModel):
     mediaFileId: UUID
     mediaUrl: HttpUrl
     instrumentCode: str = Field(min_length=1, max_length=64)
+    instrument: InstrumentConfig
     requestedAt: AwareDatetime
-
-    @field_validator("instrumentCode")
-    @classmethod
-    def normalize_instrument(cls, value: str) -> str:
-        return normalize_instrument_id(value)

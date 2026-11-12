@@ -69,7 +69,7 @@ Payload hợp lệ gồm đúng bảy trường sau:
 }
 ```
 
-Các ID phải là UUID, requestedAt phải có múi giờ. Schema từ chối trường dư. Không thêm pieceId, callbackUrl, sheetUrl hoặc instrument object vào payload này. Contract cũ trong comment TODO của `AnalysisService` chưa phải contract đang chạy.
+Các ID phải là UUID, requestedAt phải có múi giờ. Schema từ chối trường dư. Payload bắt buộc có khối `instrument` (`name`, `fminHz`, `fmaxHz`, `toleranceCents`) lấy từ bảng Instrument của BE; không thêm pieceId, callbackUrl hoặc sheetUrl. Contract cũ trong comment TODO của `AnalysisService` chưa phải contract đang chạy.
 
 Khi publish, dùng ConfirmChannel với `persistent: true`, `mandatory: true`, `contentType: application/json`; AMQP messageId bằng payload.messageId và correlationId bằng analysisId. Chờ publisher confirm, đồng thời xử lý message bị return, timeout và mất kết nối. `sendToQueue()` trả boolean cho backpressure; `await sendToQueue()` không phải cách chờ broker confirm hoặc kết quả AI. Tham khảo cơ chế callback confirm/return hiện có của `RhythmPublisherService`, nhưng chọn queue template thay vì queue so sánh `rhythm.evaluate.v1`.
 

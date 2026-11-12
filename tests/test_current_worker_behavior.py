@@ -29,7 +29,7 @@ PASS_QUALITY = {"verdict": "PASS"}
 
 
 def analysis_stub(result):
-    async def analyze(path, instrument):
+    async def analyze(path, instrument, config=None):
         return {"path": path, "instrumentId": instrument}
 
     async def compare(teacher, student):
@@ -42,7 +42,7 @@ def task(suffix="one"):
     return EvaluationTask(
         messageId=f"message-{suffix}", evaluationId="evaluation-1",
         templateUrl=f"https://example.com/{suffix}-teacher.wav",
-        studentUrl=f"https://example.com/{suffix}-student.wav", instrumentId="dan_bau",
+        studentUrl=f"https://example.com/{suffix}-student.wav", instrumentId="dan_bau", instrument=dict(name="Đàn bầu", fminHz=65, fmaxHz=1200, toleranceCents=70),
     )
 
 
@@ -76,7 +76,7 @@ async def test_success_pipeline_and_persistence(setup, monkeypatch):
         downloads.append((url, directory))
         return directory / f"{len(downloads)}.audio"
 
-    async def analyze(path, instrument):
+    async def analyze(path, instrument, config=None):
         analyses.append((path, instrument))
         return {"path": path, "instrumentId": instrument}
 

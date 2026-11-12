@@ -2,9 +2,9 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, Field, field_validator, model_validator
+from pydantic import AnyHttpUrl, BaseModel, Field, model_validator
 
-from app.evaluation.instruments import normalize_instrument_id
+from app.schemas.instrument import InstrumentConfig
 
 
 class EvaluationTask(BaseModel):
@@ -13,6 +13,7 @@ class EvaluationTask(BaseModel):
     templateUrl: AnyHttpUrl
     studentUrl: AnyHttpUrl
     instrumentId: str = Field(min_length=1, max_length=64)
+    instrument: InstrumentConfig
     templateAnalysisId: UUID | None = None
     callbackUrl: AnyHttpUrl | None = None
     attempt: int = Field(default=1, ge=1)
@@ -20,11 +21,6 @@ class EvaluationTask(BaseModel):
     templateStartSec: float | None = Field(default=None, ge=0)
     templateEndSec: float | None = Field(default=None, gt=0)
     baselineEvaluationId: str | None = Field(default=None, min_length=1, max_length=128)
-
-    @field_validator("instrumentId")
-    @classmethod
-    def normalize_instrument(cls, value: str) -> str:
-        return normalize_instrument_id(value)
 
     @model_validator(mode="after")
     def validate_segment(self) -> "EvaluationTask":
