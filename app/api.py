@@ -1,10 +1,14 @@
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import SessionFactory, get_session, initialize_database
 from app.models.evaluation import RhythmEvaluation
 from app.repositories.evaluation_repository import EvaluationRepository
+from app.routes.llm_key_routes import PREFIX as LLM_KEY_PREFIX, create_llm_key_router
 from app.routes.template_analysis_routes import create_template_router
 from app.schemas.messages import EvaluationError, EvaluationRecordResponse, EvaluationTask
 from app.services.artifact_storage_service import ArtifactStorageService, ArtifactUnavailableError
@@ -17,6 +21,15 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def startup() -> None:
         initialize_database()
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, error: RequestValidationError) -> Response:
+        if request.url.path.startswith(LLM_KEY_PREFIX):
+            # Never echo submitted input: it may contain an API key.
+            detail = [{"loc": list(item.get("loc", ())), "msg": str(item.get("msg", "")), "type": str(item.get("type", ""))}
+                      for item in error.errors()]
+            return JSONResponse(status_code=422, content={"detail": detail})
+        return await request_validation_exception_handler(request, error)
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -80,6 +93,7 @@ def create_app() -> FastAPI:
         return Response(content, media_type="application/json", headers={"Cache-Control": "private, no-store"})
 
     app.include_router(create_template_router(_require_internal_auth))
+    app.include_router(create_llm_key_router(_require_internal_auth))
     return app
 
 
