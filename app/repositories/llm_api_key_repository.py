@@ -44,10 +44,11 @@ class LlmApiKeyRepository:
             session.rollback()
             raise DuplicateKeyError(self._field_from_integrity_error(error)) from None
 
-    def create(self, session: Session, *, name: str, ciphertext: bytes, nonce: bytes, key_hmac: str) -> LlmApiKey:
+    def create(self, session: Session, *, name: str, ciphertext: bytes, nonce: bytes, key_hmac: str,
+               provider: str = "gemini") -> LlmApiKey:
         self._check_duplicates(session, None, name, key_hmac)
-        row = LlmApiKey(id=str(uuid4()), name=name, key_ciphertext=ciphertext, key_nonce=nonce,
-                        key_hmac=key_hmac, status="active")
+        row = LlmApiKey(id=str(uuid4()), name=name, provider=provider, key_ciphertext=ciphertext,
+                        key_nonce=nonce, key_hmac=key_hmac, status="active")
         session.add(row)
         self._commit(session)
         session.refresh(row)
@@ -81,11 +82,14 @@ class LlmApiKeyRepository:
         session.commit()
         return True
 
-    def acquire(self, session: Session, now: datetime, exclude_ids: set[str]) -> LlmApiKey | None:
+    def acquire(self, session: Session, now: datetime, exclude_ids: set[str],
+                provider: str | None = None) -> LlmApiKey | None:
         query = select(LlmApiKey).where(
             LlmApiKey.status == "active",
             or_(LlmApiKey.cooldown_until.is_(None), LlmApiKey.cooldown_until <= now),
         )
+        if provider is not None:
+            query = query.where(LlmApiKey.provider == provider)
         if exclude_ids:
             query = query.where(LlmApiKey.id.not_in(exclude_ids))
         query = (query.order_by(LlmApiKey.last_used_at.asc().nulls_first(), LlmApiKey.created_at, LlmApiKey.id)

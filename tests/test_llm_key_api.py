@@ -44,12 +44,23 @@ async def test_create_list_update_delete_flow(tmp_path, monkeypatch):
         assert created.status_code == 201
         body = created.json()
         assert body["name"] == "main" and body["status"] == "active"
-        assert set(body) == {"id", "name", "status", "cooldownUntil", "lastUsedAt", "lastErrorCode",
+        assert body["provider"] == "gemini"
+        assert set(body) == {"id", "name", "provider", "status", "cooldownUntil", "lastUsedAt", "lastErrorCode",
                              "successCount", "failCount", "createdAt"}
         listed = await client.get(URL)
         assert listed.status_code == 200 and [i["id"] for i in listed.json()["items"]] == [body["id"]]
         assert (await client.delete(f"{URL}/{body['id']}")).status_code == 204
         assert (await client.get(URL)).json() == {"items": []}
+
+
+@pytest.mark.asyncio
+async def test_create_with_provider_and_reject_unknown_provider(tmp_path, monkeypatch):
+    client, _ = make(tmp_path, monkeypatch)
+    async with client:
+        created = await client.post(URL, json={"name": "or", "key": KEY, "provider": "openrouter"})
+        assert created.status_code == 201 and created.json()["provider"] == "openrouter"
+        bad = await client.post(URL, json={"name": "x", "key": KEY + "2", "provider": "nope"})
+        assert bad.status_code == 422
 
 
 @pytest.mark.asyncio
