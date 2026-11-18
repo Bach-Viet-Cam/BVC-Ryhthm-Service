@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     callback_max_retries: int = Field(default=2, ge=0, le=5)
     callback_allowed_hosts: str = ""
     gemini_api_key: str = ""
+    key_encryption_secret: str = ""
     gemini_model: str = "gemini-2.5-flash"
     gemini_timeout_seconds: float = 30.0
     max_file_bytes: int = 25 * 1024 * 1024
