@@ -25,6 +25,7 @@ def test_upgrade_preserves_evaluations_and_downgrade_restores_previous_schema(tm
     command.upgrade(config, "head")
     inspector = inspect(engine)
     assert inspector.has_table("template_analyses")
+    assert inspector.has_table("llm_api_keys")
     assert "student_quality_report" in {column["name"] for column in inspector.get_columns("rhythm_evaluations")}
     assert {"sheet_music_id", "media_file_id", "artifact_key"} <= {column["name"] for column in inspector.get_columns("template_analyses")}
     from alembic.autogenerate import compare_metadata
@@ -36,6 +37,7 @@ def test_upgrade_preserves_evaluations_and_downgrade_restores_previous_schema(tm
         assert connection.scalar(text("SELECT status FROM rhythm_evaluations WHERE evaluation_id='existing'")) == "completed"
     command.downgrade(config, "20260926_0001")
     assert not inspect(engine).has_table("template_analyses")
+    assert not inspect(engine).has_table("llm_api_keys")
     assert "student_quality_report" not in {column["name"] for column in inspect(engine).get_columns("rhythm_evaluations")}
     command.upgrade(config, "head")
     engine.dispose()
