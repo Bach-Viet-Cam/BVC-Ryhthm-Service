@@ -5,7 +5,7 @@ import pytest
 from app.feedback import gemini_feedback as feedback
 
 
-async def _empty_pool(exclude_ids):
+async def _empty_pool(exclude_ids, provider=None):
     return None
 
 
@@ -13,7 +13,8 @@ async def _empty_pool(exclude_ids):
 @pytest.mark.parametrize("failure", ["timeout", "unavailable", "empty"])
 async def test_configured_ai_failure_does_not_complete_with_fallback(monkeypatch, failure):
     monkeypatch.setattr(feedback, "get_settings", lambda: SimpleNamespace(
-        gemini_api_key="test", gemini_timeout_seconds=0.01, gemini_model="gemini-test", key_encryption_secret=""))
+        gemini_api_key="test", gemini_timeout_seconds=0.01, gemini_model="gemini-test", key_encryption_secret="",
+        openrouter_api_key=""))
     monkeypatch.setattr(feedback, "_acquire_key", _empty_pool)
 
     async def generate(*args):
@@ -33,6 +34,7 @@ async def test_configured_ai_failure_does_not_complete_with_fallback(monkeypatch
 @pytest.mark.asyncio
 async def test_unconfigured_ai_keeps_existing_optional_feedback_behavior(monkeypatch):
     monkeypatch.setattr(feedback, "get_settings", lambda: SimpleNamespace(
-        gemini_api_key="", gemini_timeout_seconds=1.0, gemini_model="gemini-test", key_encryption_secret=""))
+        gemini_api_key="", gemini_timeout_seconds=1.0, gemini_model="gemini-test", key_encryption_secret="",
+        openrouter_api_key=""))
     monkeypatch.setattr(feedback, "_acquire_key", _empty_pool)
     assert await feedback.generate_feedback({}) == feedback.FALLBACK_FEEDBACK

@@ -5,12 +5,14 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 KeyName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 KeyValue = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=512)]
+Provider = Literal["gemini", "openrouter"]
 
 
 class LlmKeyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: KeyName
     key: KeyValue
+    provider: Provider = "gemini"
 
 
 class LlmKeyUpdate(BaseModel):
@@ -30,6 +32,7 @@ class LlmKeyResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     id: str
     name: str
+    provider: str = "gemini"
     status: str
     cooldownUntil: datetime | None = None
     lastUsedAt: datetime | None = None

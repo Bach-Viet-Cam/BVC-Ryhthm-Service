@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     key_encryption_secret: str = ""
     gemini_model: str = "gemini-2.5-flash"
     gemini_timeout_seconds: float = 30.0
+    openrouter_api_key: str = ""
+    openrouter_model: str = "openrouter/free"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     max_file_bytes: int = 25 * 1024 * 1024
     download_timeout_seconds: float = 60.0
     max_retries: int = Field(default=3, ge=0)

@@ -14,22 +14,26 @@ def _api_error(code: int) -> genai_errors.APIError:
     return genai_errors.APIError(code, {"error": {"message": f"boom {code}", "status": "X"}})
 
 
-def _settings(gemini_api_key: str = "", timeout: float = 5.0) -> SimpleNamespace:
+def _settings(gemini_api_key: str = "", timeout: float = 5.0, openrouter_api_key: str = "") -> SimpleNamespace:
     return SimpleNamespace(gemini_api_key=gemini_api_key, gemini_timeout_seconds=timeout,
-                           gemini_model="gemini-test", key_encryption_secret="")
+                           gemini_model="gemini-test", key_encryption_secret="",
+                           openrouter_api_key=openrouter_api_key)
 
 
 class FakePool:
     """Stands in for _acquire_key / _record_outcome and records what the feedback flow asked for."""
 
-    def __init__(self, keys: list[tuple[str, str]]):
-        self.keys = [feedback.PooledKey(id=key_id, api_key=api_key) for key_id, api_key in keys]
+    def __init__(self, keys: list[tuple[str, str]], openrouter_keys: list[tuple[str, str]] | None = None):
+        self.keys = {
+            "gemini": [feedback.PooledKey(id=key_id, api_key=api_key) for key_id, api_key in keys],
+            "openrouter": [feedback.PooledKey(id=key_id, api_key=api_key) for key_id, api_key in openrouter_keys or []],
+        }
         self.acquire_calls: list[set[str]] = []
         self.outcomes: list[tuple[str, str | None, str | None]] = []
 
-    async def acquire(self, exclude_ids: set[str]):
+    async def acquire(self, exclude_ids: set[str], provider: str | None = None):
         self.acquire_calls.append(set(exclude_ids))
-        for key in self.keys:
+        for key in self.keys[provider or "gemini"]:
             if key.id not in exclude_ids:
                 return key
         return None
@@ -41,7 +45,7 @@ class FakePool:
 def _install(monkeypatch, pool: FakePool, generate, settings: SimpleNamespace | None = None) -> list[str | None]:
     used_keys: list[str | None] = []
 
-    def fake_sync(result, api_key=None):
+    def fake_sync(result, api_key=None, provider="gemini"):
         used_keys.append(api_key)
         return generate(api_key)
 
@@ -100,13 +104,73 @@ async def test_other_error_switches_without_locking_key(monkeypatch):
 
     def generate(api_key):
         if api_key == "key-one":
-            raise _api_error(500)
+            raise ValueError("bad payload")
         return "ok"
 
     used = _install(monkeypatch, pool, generate)
     assert await feedback.generate_feedback({}) == "ok"
     assert used == ["key-one", "key-two"]
     assert pool.outcomes[0][0] == "k1" and pool.outcomes[0][2] == "other"
+
+
+@pytest.mark.asyncio
+async def test_5xx_switches_provider_without_rotating_gemini_keys(monkeypatch):
+    pool = FakePool([("g1", "gem-one"), ("g2", "gem-two")], [("o1", "or-one")])
+
+    def generate(api_key):
+        if api_key.startswith("gem"):
+            raise _api_error(503)
+        return "from openrouter"
+
+    used = _install(monkeypatch, pool, generate)
+    assert await feedback.generate_feedback({}) == "from openrouter"
+    assert used == ["gem-one", "or-one"]  # gem-two was never tried
+    assert pool.outcomes == [("g1", "HTTP_503", "server"), ("o1", None, None)]
+
+
+@pytest.mark.asyncio
+async def test_all_providers_5xx_raises_failed(monkeypatch):
+    pool = FakePool([("g1", "gem-one"), ("g2", "gem-two")], [("o1", "or-one"), ("o2", "or-two")])
+
+    def generate(api_key):
+        raise feedback.ProviderError(502) if api_key.startswith("or") else _api_error(500)
+
+    used = _install(monkeypatch, pool, generate)
+    with pytest.raises(feedback.FeedbackGenerationError) as caught:
+        await feedback.generate_feedback({})
+    assert caught.value.code == "AI_FEEDBACK_FAILED"
+    assert used == ["gem-one", "or-one"]
+
+
+@pytest.mark.asyncio
+async def test_provider_order_constant_picks_openrouter_first(monkeypatch):
+    pool = FakePool([("g1", "gem-one")], [("o1", "or-one")])
+    monkeypatch.setattr(feedback, "PROVIDER_ORDER", ("openrouter", "gemini"))
+    used = _install(monkeypatch, pool, lambda api_key: "ok", _settings())
+    assert await feedback.generate_feedback({}) == "ok"
+    assert used == ["or-one"]
+
+
+@pytest.mark.asyncio
+async def test_quota_on_gemini_rotates_keys_before_switching_provider(monkeypatch):
+    pool = FakePool([("g1", "gem-one"), ("g2", "gem-two")], [("o1", "or-one")])
+
+    def generate(api_key):
+        if api_key.startswith("gem"):
+            raise _api_error(429)
+        return "ok"
+
+    used = _install(monkeypatch, pool, generate)
+    assert await feedback.generate_feedback({}) == "ok"
+    assert used == ["gem-one", "gem-two", "or-one"]
+
+
+@pytest.mark.asyncio
+async def test_openrouter_env_key_used_when_no_pool_keys(monkeypatch):
+    pool = FakePool([])
+    used = _install(monkeypatch, pool, lambda api_key: "ok", _settings(openrouter_api_key="or-env"))
+    assert await feedback.generate_feedback({}) == "ok"
+    assert used == ["or-env"]
 
 
 @pytest.mark.asyncio
@@ -205,7 +269,12 @@ async def test_error_message_and_logs_never_contain_key(monkeypatch, caplog):
     (_api_error(429), "quota"),
     (_api_error(401), "invalid"),
     (_api_error(403), "invalid"),
-    (_api_error(500), "other"),
+    (_api_error(500), "server"),
+    (_api_error(503), "server"),
+    (feedback.ProviderError(502), "server"),
+    (feedback.ProviderError(429), "quota"),
+    (feedback.ProviderError(401), "invalid"),
+    (_api_error(400), "other"),
     (ValueError("bad"), "other"),
 ])
 def test_classify_error(error, expected):
@@ -238,7 +307,7 @@ async def test_acquire_key_skips_key_that_fails_to_decrypt(monkeypatch, caplog):
     seen: list[set[str]] = []
 
     class FakeRepository:
-        def acquire(self, session, now, exclude_ids):
+        def acquire(self, session, now, exclude_ids, provider=None):
             assert now.tzinfo is not None
             seen.append(set(exclude_ids))
             return next((row for row in rows if row.id not in exclude_ids), None)

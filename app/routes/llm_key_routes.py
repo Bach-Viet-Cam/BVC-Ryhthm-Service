@@ -15,7 +15,7 @@ PREFIX = "/api/v1/admin/llm-keys"
 
 def _to_response(row: LlmApiKey) -> LlmKeyResponse:
     return LlmKeyResponse(
-        id=row.id, name=row.name, status=row.status, cooldownUntil=row.cooldown_until,
+        id=row.id, name=row.name, provider=row.provider, status=row.status, cooldownUntil=row.cooldown_until,
         lastUsedAt=row.last_used_at, lastErrorCode=row.last_error_code,
         successCount=row.success_count or 0, failCount=row.fail_count or 0, createdAt=row.created_at)
 
@@ -56,7 +56,8 @@ def create_llm_key_router(require_auth: Callable[[str | None], None]) -> APIRout
     def create_key(body: LlmKeyCreate, session: Session = Depends(get_session)) -> LlmKeyResponse:
         ciphertext, nonce, key_hmac = _encrypt(body.key)
         try:
-            row = repository.create(session, name=body.name, ciphertext=ciphertext, nonce=nonce, key_hmac=key_hmac)
+            row = repository.create(session, name=body.name, ciphertext=ciphertext, nonce=nonce, key_hmac=key_hmac,
+                                       provider=body.provider)
         except DuplicateKeyError as error:
             raise _duplicate(error) from None
         return _to_response(row)
