@@ -34,6 +34,23 @@ Commit cả `pyproject.toml` và `uv.lock`. Docker dùng `uv sync --locked` đ�
 
 Sau khi phân tích audio, service gọi Gemini để tạo `aiFeedback` và lưu cùng `result_json`. Nếu chưa cấu hình `GEMINI_API_KEY` hoặc Gemini lỗi, kết quả phân tích vẫn được lưu với nội dung fallback.
 
+## Pool API key LLM
+
+Service có thể dùng nhiều API key Gemini luân phiên. Admin quản lý key qua API/trang quản trị của Backend (`/admin/llm-keys`); key không bao giờ đọc lại được sau khi lưu.
+
+- Key được mã hóa AES-256-GCM trước khi lưu vào database. API chỉ trả metadata (tên, trạng thái, thời điểm dùng), không trả giá trị key.
+- Biến `RHYTHM_SERVICE_KEY_ENCRYPTION_SECRET` là khóa mã hóa, phải là 32 byte ngẫu nhiên dạng base64. Sinh secret:
+
+  ```powershell
+  python -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"
+  ```
+
+- **Cảnh báo:** không đổi `RHYTHM_SERVICE_KEY_ENCRYPTION_SECRET` sau khi đã có key trong database. Key cũ sẽ không giải mã được và phải nhập lại.
+- Cách chọn key: ưu tiên key được dùng lâu nhất (least-recently-used). Key gặp lỗi 429 bị tạm nghỉ 60 giây; key gặp lỗi 401/403 bị đánh dấu `invalid` và không được dùng nữa cho đến khi admin kích hoạt lại. Mỗi lượt nhận xét thử tối đa 3 key.
+- Thứ tự dự phòng khi tạo nhận xét: pool key trong database → `RHYTHM_SERVICE_GEMINI_API_KEY` → nội dung nhận xét fallback chung. Kết quả phân tích luôn được lưu dù AI lỗi.
+
+Docker Compose truyền `RHYTHM_SERVICE_KEY_ENCRYPTION_SECRET` từ file `.env`; nếu để trống, pool key không hoạt động.
+
 ## Database migration
 
 Schema được quản lý bằng Alembic. Service tự chạy `alembic upgrade head` trước khi mở HTTP server và RabbitMQ worker.
