@@ -7,6 +7,7 @@ from app.config import get_settings
 from app.database import Base
 from app.models import template_analysis  # noqa: F401
 from app.models import evaluation  # noqa: F401
+from app.models import llm_api_key  # noqa: F401
 
 
 config = context.config
