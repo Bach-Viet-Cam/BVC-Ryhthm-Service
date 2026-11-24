@@ -97,12 +97,12 @@ def test_itc_re_005_request_body_is_validated(api, stub):
     assert response.status_code == 422 and "baselineEvaluationId requires a template range" in messages(response)
 
 
-def test_itc_re_006_missing_student_file_is_retried_three_times(api, stub):
+def test_itc_re_006_missing_student_file_fails(api, stub):
     url = stub.status_url(404, "ev-404.wav")
     assert _post(api, stub, "ev-404", studentUrl=url).status_code == 202
     record = support.wait_evaluation(api, "ev-404")
-    # JOB-01: a file that cannot be downloaded is tried again up to 3 times (4 downloads in total)
-    assert stub.state.hits["/status/404/ev-404.wav"] == 4, stub.state.hits
+    # Round 1 decision: HTTP 404 is permanent, so the file is downloaded once (only 5xx/429 are retried)
+    assert stub.state.hits["/status/404/ev-404.wav"] == 1, stub.state.hits
     assert record["status"] == "failed"
     assert record["error"] == {"code": "AUDIO_DOWNLOAD_FAILED", "message": "Storage trả về HTTP 404"}
 
@@ -110,7 +110,8 @@ def test_itc_re_006_missing_student_file_is_retried_three_times(api, stub):
 def test_itc_re_007_silent_recording_is_rejected(api, stub):
     assert _post(api, stub, "ev-silent", student="silent.wav").status_code == 202
     record = support.wait_evaluation(api, "ev-silent")
-    assert record["status"] == "rejected", record
+    # Round 1 decision: a rejected recording is stored with status "failed" and its rejection code
+    assert record["status"] == "failed", record
     assert record["error"] == {"code": "AUDIO_SILENT", "message": "Bản thu hoàn toàn im lặng. Vui lòng thu âm lại."}
     assert stub.state.hits["/media/silent.wav"] == 1
 
@@ -118,7 +119,7 @@ def test_itc_re_007_silent_recording_is_rejected(api, stub):
 def test_itc_re_008_text_file_is_rejected(api, stub):
     assert _post(api, stub, "ev-text", student="fake.wav").status_code == 202
     record = support.wait_evaluation(api, "ev-text")
-    assert record["status"] == "rejected", record
+    assert record["status"] == "failed", record
     assert record["error"] == {"code": "AUDIO_DECODE_FAILED",
                                "message": "Không thể giải mã file audio. Vui lòng kiểm tra bản thu."}
     assert stub.state.hits["/media/fake.wav"] == 1

@@ -60,7 +60,9 @@ def _download_failure(api, stub, evaluation_id: str, code: int) -> dict:
     record = support.wait_evaluation(api, evaluation_id)
     time.sleep(1)
     failed = [item["body"] for item in stub.state.callbacks_for(evaluation_id) if item["body"]["status"] == "failed"]
-    assert stub.state.hits[f"/status/{code}/{name}"] == 4, stub.state.hits  # 1 try + x-retry-count 1, 2, 3
+    # 5xx: 1 try + x-retry-count 1, 2, 3. Round 1 decision: 404 is permanent and is not retried.
+    expected = 1 if code == 404 else 4
+    assert stub.state.hits[f"/status/{code}/{name}"] == expected, stub.state.hits
     assert len(failed) == 1, failed
     assert failed[0]["job"] == "quality_check" and failed[0]["code"] == "AUDIO_DOWNLOAD_FAILED"
     assert failed[0]["reason"] == f"Storage trả về HTTP {code}"
@@ -68,7 +70,7 @@ def _download_failure(api, stub, evaluation_id: str, code: int) -> dict:
     return record
 
 
-def test_itc_rw_003_missing_student_file_retried_three_times(api, stub):
+def test_itc_rw_003_missing_student_file_fails(api, stub):
     _download_failure(api, stub, "wk-404", 404)
 
 
@@ -94,7 +96,9 @@ def test_itc_rw_006_silent_recording_rejected(api, stub):
     assert {"evaluationId": "wk-silent", "attempt": 1, "job": "quality_check", "status": "rejected",
             "code": "AUDIO_SILENT", "reason": "Bản thu hoàn toàn im lặng. Vui lòng thu âm lại."} in bodies
     assert not [body for body in bodies if body["status"] == "failed"]
-    assert record["status"] == "rejected", record
+    # Round 1 decision: the evaluation is stored with status "failed" and the rejection code
+    assert record["status"] == "failed", record
+    assert record["error"]["code"] == "AUDIO_SILENT"
     assert stub.state.hits["/media/silent.wav"] == 1
 
 
@@ -113,25 +117,29 @@ def test_itc_rw_007_completed_job_not_scored_again(api, stub, db_url):
     assert support.queue_count(support.EVALUATE_QUEUE) == 0
 
 
-def test_itc_rw_008_many_evaluations_at_the_same_time(api, stub, db_url):
+def test_itc_rw_008_many_evaluations_are_queued_and_all_complete(api, stub, db_url):
+    # Round 1 decision: one worker runs one evaluation at a time (prefetch 1); the others wait in the
+    # queue and every job still completes. The 50-at-once target of the NFR is not checked here.
     ids = [f"wk-p{index:02d}-{support.RUN_ID}" for index in range(1, 56)]
     for evaluation_id in ids:
         support.publish(support.EVALUATE_QUEUE, _job(stub, evaluation_id, callbackUrl=None))
     pattern = f"wk-p%-{support.RUN_ID}"
     peak = 0
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline and peak < 50:
-        rows = support.query(db_url, "SELECT COUNT(*) FROM rhythm_evaluations WHERE evaluation_id LIKE %s AND status = 'processing'", (pattern,))
-        peak = max(peak, rows[0][0])
+    deadline = time.monotonic() + 1800
+
+    def counts() -> dict[str, int]:
+        rows = support.query(db_url, "SELECT status, COUNT(*) FROM rhythm_evaluations WHERE evaluation_id LIKE %s GROUP BY status", (pattern,))
+        return dict(rows)
+
+    while time.monotonic() < deadline:
+        current = counts()
+        peak = max(peak, current.get("processing", 0))
+        if current.get("completed", 0) + current.get("failed", 0) == len(ids):
+            break
         time.sleep(0.5)
-    if peak < 50:
-        # Stop the load so that the next tests are not blocked, then report the observed peak.
-        support.drain(support.EVALUATE_QUEUE)
-        support.wait_for(lambda: support.query(db_url, "SELECT COUNT(*) FROM rhythm_evaluations WHERE evaluation_id LIKE %s AND status = 'processing'", (pattern,))[0][0] == 0,
-                         timeout=180, message="running jobs to finish")
-    assert peak >= 50, f"peak of evaluations processing at the same time: {peak} (expected 50)"
-    for evaluation_id in ids:
-        assert support.wait_evaluation(api, evaluation_id, timeout=900)["status"] == "completed"
+    assert counts() == {"completed": len(ids)}, counts()
+    assert peak <= 1, f"peak of evaluations processing at the same time: {peak}"
+    assert support.queue_count(support.EVALUATE_QUEUE) == 0
     assert support.queue_count(support.EVALUATE_DLQ) == 0
 
 

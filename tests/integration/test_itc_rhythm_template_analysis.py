@@ -131,12 +131,14 @@ def _download_failure(api, stub, code: int) -> None:
     task["mediaUrl"] = stub.status_url(code, name)
     support.publish(support.TEMPLATE_QUEUE, task)
     record = support.wait_template(api, task["analysisId"])
-    assert stub.state.hits[f"/status/{code}/{name}"] == 4, stub.state.hits  # 1 try + 3 retries (JOB-01)
+    # 5xx: 1 try + 3 retries (JOB-01). Round 1 decision: 404 is permanent and is not retried.
+    expected = 1 if code == 404 else 4
+    assert stub.state.hits[f"/status/{code}/{name}"] == expected, stub.state.hits
     assert record["status"] == "failed"
     assert record["error"] == {"code": "AUDIO_DOWNLOAD_FAILED", "message": f"Storage trả về HTTP {code}"}
 
 
-def test_itc_rt_007_missing_template_retried_three_times(api, stub):
+def test_itc_rt_007_missing_template_fails(api, stub):
     _download_failure(api, stub, 404)
 
 
